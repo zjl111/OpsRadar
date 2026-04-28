@@ -1,0 +1,109 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  opsradar-api:
+    build: .
+    environment:
+      OPSRADAR_ENV: production
+      OPSRADAR_SECRET_KEY: ${OPSRADAR_SECRET_KEY:-replace-with-a-long-random-jwt-secret}
+      OPSRADAR_ENCRYPTION_KEY: ${OPSRADAR_ENCRYPTION_KEY:-replace-with-a-long-random-credential-encryption-key}
+      OPSRADAR_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-postgres}
+      OPSRADAR_REDIS_URL: redis://redis:6379/0
+      OPSRADAR_CELERY_BROKER_URL: redis://redis:6379/0
+      OPSRADAR_CELERY_RESULT_BACKEND: redis://redis:6379/1
+      OPSRADAR_REPORT_DIR: /app/reports
+      OPSRADAR_API_WORKERS: ${OPSRADAR_API_WORKERS:-2}
+      OPSRADAR_WORKER_CONCURRENCY: ${OPSRADAR_WORKER_CONCURRENCY:-2}
+      OPSRADAR_SSH_CONNECT_TIMEOUT: ${OPSRADAR_SSH_CONNECT_TIMEOUT:-10}
+      OPSRADAR_SSH_COMMAND_TIMEOUT: ${OPSRADAR_SSH_COMMAND_TIMEOUT:-30}
+      OPSRADAR_MAX_TASK_SECONDS: ${OPSRADAR_MAX_TASK_SECONDS:-3600}
+      OPSRADAR_PUBLIC_BASE_URL: ${OPSRADAR_PUBLIC_BASE_URL:-https://opsradar.example.com}
+      OPSRADAR_CORS_ORIGINS: ${OPSRADAR_CORS_ORIGINS:-https://opsradar.example.com}
+    command: >
+      sh -c "python3 -m backend.app.cli migrate &&
+             python3 -m backend.app.cli check &&
+             gunicorn backend.app.main:app --worker-class uvicorn.workers.UvicornWorker --workers $${OPSRADAR_API_WORKERS:-2} --bind 0.0.0.0:4173"
+    volumes:
+      - reports_data:/app/reports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  opsradar-worker:
+    build: .
+    environment:
+      OPSRADAR_ENV: production
+      OPSRADAR_SECRET_KEY: ${OPSRADAR_SECRET_KEY:-replace-with-a-long-random-jwt-secret}
+      OPSRADAR_ENCRYPTION_KEY: ${OPSRADAR_ENCRYPTION_KEY:-replace-with-a-long-random-credential-encryption-key}
+      OPSRADAR_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-postgres}
+      OPSRADAR_REDIS_URL: redis://redis:6379/0
+      OPSRADAR_CELERY_BROKER_URL: redis://redis:6379/0
+      OPSRADAR_CELERY_RESULT_BACKEND: redis://redis:6379/1
+      OPSRADAR_REPORT_DIR: /app/reports
+      OPSRADAR_WORKER_CONCURRENCY: ${OPSRADAR_WORKER_CONCURRENCY:-2}
+      OPSRADAR_SSH_CONNECT_TIMEOUT: ${OPSRADAR_SSH_CONNECT_TIMEOUT:-10}
+      OPSRADAR_SSH_COMMAND_TIMEOUT: ${OPSRADAR_SSH_COMMAND_TIMEOUT:-30}
+      OPSRADAR_MAX_TASK_SECONDS: ${OPSRADAR_MAX_TASK_SECONDS:-3600}
+    command: celery -A backend.app.worker.celery_app worker --loglevel=info --concurrency=${OPSRADAR_WORKER_CONCURRENCY:-2}
+    volumes:
+      - reports_data:/app/reports
+    depends_on:
+      opsradar-api:
+        condition: service_started
+
+  opsradar-beat:
+    build: .
+    environment:
+      OPSRADAR_ENV: production
+      OPSRADAR_SECRET_KEY: ${OPSRADAR_SECRET_KEY:-replace-with-a-long-random-jwt-secret}
+      OPSRADAR_ENCRYPTION_KEY: ${OPSRADAR_ENCRYPTION_KEY:-replace-with-a-long-random-credential-encryption-key}
+      OPSRADAR_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-postgres}
+      OPSRADAR_REDIS_URL: redis://redis:6379/0
+      OPSRADAR_CELERY_BROKER_URL: redis://redis:6379/0
+      OPSRADAR_CELERY_RESULT_BACKEND: redis://redis:6379/1
+      OPSRADAR_BEAT_INTERVAL_SECONDS: ${OPSRADAR_BEAT_INTERVAL_SECONDS:-30}
+    command: python3 -m backend.app.beat
+    depends_on:
+      opsradar-worker:
+        condition: service_started
+
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${OPSRADAR_TLS_DIR:-./deploy/certs}:/etc/nginx/certs:ro
+    depends_on:
+      - opsradar-api
+
+volumes:
+  postgres_data:
+  redis_data:
+  reports_data:

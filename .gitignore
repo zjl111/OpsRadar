@@ -1,0 +1,15 @@
+.DS_Store
+.env
+.claude/settings.local.json
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+reports/*.html
+reports/*.docx
+reports/*.pdf
+reports/*.tmp
+*.log

@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CMP Inspection Report</title>
+    <style type="text/css" media="all">
+        html, body, div, span, applet, object, iframe, h1, h2, h3, h4, h5, h6, p, blockquote, pre, a, abbr,
+        acronym, address, big, cite, code, del, dfn, em, img, ins, kbd, q, s, samp, small, strike, strong, sub,
+        sup, tt, var, b, u, i, center, dl, dt, dd, ol, ul, li, fieldset, form, label, legend, table, caption, tbody,
+        tfoot, thead, tr, th, td, article, aside, canvas, details, embed, figure, figcaption, footer, header,
+        hgroup, menu, nav, output, ruby, section, summary, time, mark, audio, video {
+            margin: 0;
+            padding: 0;
+            border: 0;
+            font-size: 100%;
+            font: inherit;
+            vertical-align: baseline;
+            -webkit-text-size-adjust: none;
+        }
+
+        html, body {
+            font-family: "Helvetica Neue", "Segoe UI", helvetica, arial, sans-serif;
+            width: 100%;
+            color: #333;
+            font-size: 13px;
+            background: #efefef;
+        }
+
+        table {
+            table-layout: fixed;
+            width: 100%;
+            border-collapse: collapse;
+            border-spacing: 0;
+        }
+
+        .clear {
+            clear: both;
+            width: 0 !important;
+            height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        .plugin-row-header {
+            height: 35px;
+            line-height: 35px;
+            background: #f5f5f5;
+            font-size: 12px;
+            border: 1px solid #ddd;
+        }
+
+        .plugin-row {
+            border: 1px solid #ddd;
+            text-align: center;
+        }
+
+        .plugin-row td {
+            padding: 10px 8px;
+            line-height: 18px;
+            word-break: break-word;
+        }
+
+        .details-header {
+            font-size: 14px;
+            font-weight: bold;
+            padding: 0 0 5px 0;
+            margin: 0 0 5px 0;
+            border-bottom: 1px dotted #ccc;
+        }
+
+        .table-wrapper.details {
+            margin: 0 0 20px 0;
+        }
+
+        .table-wrapper.details > table > tbody > tr > td {
+            padding: 8px 6px;
+        }
+
+        .status-ok {
+            color: #3fae49;
+            font-weight: bold;
+        }
+
+        .status-warn {
+            color: #ee9336;
+            font-weight: bold;
+        }
+
+        .status-failed {
+            color: #d43f3a;
+            font-weight: bold;
+        }
+
+        .badge {
+            display: inline-block;
+            min-width: 54px;
+            padding: 3px 8px;
+            border-radius: 999px;
+            color: #fff;
+            font-size: 11px;
+            line-height: 16px;
+        }
+
+        .summary-card {
+            box-sizing: border-box;
+            font-size: 45px;
+            font-weight: 100;
+            line-height: 80px;
+            color: #fff;
+            text-align: center;
+            border-radius: 3px 3px 0 0;
+            width: 98%;
+            margin: 0;
+        }
+
+        .summary-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            padding: 5px 0;
+            text-align: center;
+            width: 98%;
+            box-sizing: border-box;
+            border-left: 1px solid #ddd;
+            border-right: 1px solid #ddd;
+            border-bottom: 1px solid #ddd;
+            border-radius: 0 0 3px 3px;
+            margin: 0 0 15px 0;
+        }
+
+        .cluster-card {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 14px;
+            margin: 0 0 14px 0;
+            background: #fafafa;
+        }
+
+        .cluster-title {
+            font-size: 16px;
+            font-weight: bold;
+            margin: 0 0 6px 0;
+        }
+
+        .cluster-meta {
+            color: #666;
+            margin: 0 0 10px 0;
+        }
+
+        .mono {
+            font-family: Menlo, Monaco, Consolas, monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div id="report" style="width: 1024px; box-sizing: border-box; margin: 0 auto; background: #fff; padding: 0 20px 20px 20px; border-top: #263746 solid 3px; box-shadow: 0 2px 10px rgba(0, 0, 0, .2); margin-bottom: 20px; border-radius: 0 0 3px 3px;">
+        <header style="width: 100%; border-bottom: 1px dotted #ccc; padding: 20px 0; margin: 0 0 20px 0;">
+            <div style="float: left;">
+                <h1>
+                    <img src="{{ logo_data_uri }}" height="50" border="0" alt="Fit2cloud Report" style="display: block;">
+                </h1>
+            </div>
+            <div style="float: right;">
+                <h1 style="font-size: 18px;">{{ application_name }}</h1>
+                <h2 style="color: #999; text-align: right">Report generated by CMP™</h2>
+            </div>
+            <div class="clear"></div>
+        </header>
+
+        <h3 style="font-size: 24px; font-weight: 100;">CMP INSPECTION REPORT</h3>
+        <h4 style="color: #999; border-bottom: 1px dotted #ccc; padding: 0 0 20px 0; margin: 0 0 20px 0;">
+            {{ company_name }} / {{ environment }} / generated at {{ generated_at }}
+        </h4>
+
+        <h6 style="padding: 20px 0; border-top: 1px dotted #ccc; border-bottom: 1px dotted #ccc; font-size: 20px; font-weight: 100; line-height: 20px;">Overviews</h6>
+
+        <table cellpadding="0" cellspacing="0">
+            <tbody>
+                <tr>
+                    <td><div class="summary-card" style="background: #d43f3a;">{{ summary.critical }}</div></td>
+                    <td><div class="summary-card" style="background: #ee9336;">{{ summary.high }}</div></td>
+                    <td><div class="summary-card" style="background: #fdc431;">{{ summary.medium }}</div></td>
+                    <td><div class="summary-card" style="background: #3fae49;">{{ summary.low }}</div></td>
+                </tr>
+                <tr>
+                    <td><div class="summary-label">Critical</div></td>
+                    <td><div class="summary-label">High</div></td>
+                    <td><div class="summary-label">Medium</div></td>
+                    <td><div class="summary-label">Low</div></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="details-header">Scan Information</div>
+        <div class="table-wrapper details">
+            <table cellpadding="0" cellspacing="0">
+                <tbody>
+                    <tr>
+                        <td style="width: 20%;">Company name:</td>
+                        <td style="width: 80%;">{{ company_name }}</td>
+                    </tr>
+                    <tr>
+                        <td>Application:</td>
+                        <td>{{ application_name }}</td>
+                    </tr>
+                    <tr>
+                        <td>Environment:</td>
+                        <td>{{ environment }}</td>
+                    </tr>
+                    <tr>
+                        <td>Start time:</td>
+                        <td>{{ start_time }}</td>
+                    </tr>
+                    <tr>
+                        <td>End time:</td>
+                        <td>{{ end_time }}</td>
+                    </tr>
+                    <tr>
+                        <td>Clusters:</td>
+                        <td>{{ summary.total_clusters }} clusters / {{ summary.total_nodes }} nodes / {{ summary.healthy_nodes }} healthy / {{ summary.unhealthy_nodes }} abnormal</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="details-header">Cluster Overview</div>
+        <div class="table-wrapper details">
+            {% for cluster in clusters %}
+            <div class="cluster-card">
+                <div class="cluster-title">{{ cluster.name }} <span class="badge" style="background: #0071b9;">{{ cluster.role }}</span></div>
+                <div class="cluster-meta">{{ cluster.description or "No description" }}</div>
+                <div>Nodes: {{ cluster.node_count }} / Healthy: {{ cluster.healthy_count }} / Abnormal: {{ cluster.warning_count }}</div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="details-header">Host Information</div>
+        <div class="table-wrapper details">
+            <table cellpadding="0" cellspacing="0">
+                <tbody>
+                    <tr class="plugin-row-header">
+                        <th>Cluster</th>
+                        <th>Role</th>
+                        <th>HostName</th>
+                        <th>IP Address</th>
+                        <th>OS</th>
+                        <th>CPU</th>
+                        <th>Memory</th>
+                        <th>DISK</th>
+                        <th>LOAD</th>
+                        <th>Status</th>
+                    </tr>
+                    {% for d in results %}
+                    <tr class="plugin-row">
+                        <td>{{ d.cluster_name }}</td>
+                        <td>{{ d.cluster_role }}</td>
+                        <td>{{ d.hostname }}</td>
+                        <td>{{ d.ip }}</td>
+                        <td>{{ d.os }}</td>
+                        <td>{{ d.cpu }}</td>
+                        <td>{{ d.mem }}</td>
+                        <td>{{ d.disk }}</td>
+                        <td>{{ d.load }}</td>
+                        <td class="{% if d.overall_status == 'OK' %}status-ok{% elif d.overall_status == 'WARN' %}status-warn{% else %}status-failed{% endif %}">{{ d.overall_status }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="details-header">Service Information</div>
+        <div class="table-wrapper details">
+            <table cellpadding="0" cellspacing="0">
+                <tbody>
+                    <tr class="plugin-row-header">
+                        <th>HostName</th>
+                        <th>Reachability</th>
+                        <th>Processes</th>
+                        <th>Ports</th>
+                        <th>Custom Checks</th>
+                        <th>Status</th>
+                    </tr>
+                    {% for d in results %}
+                    <tr class="plugin-row">
+                        <td>{{ d.hostname }}</td>
+                        <td class="{% if d.ping %}status-ok{% else %}status-failed{% endif %}">{{ "OK" if d.ping else "FAILED" }}</td>
+                        <td>
+                            {% if d.processes %}
+                                {% for item in d.processes %}
+                                    <div>{{ item.name }}: <span class="{% if item.status == 'OK' %}status-ok{% else %}status-failed{% endif %}">{{ item.status }}</span></div>
+                                {% endfor %}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if d.ports %}
+                                {% for item in d.ports %}
+                                    <div>{{ item.name }}: <span class="{% if item.status == 'OK' %}status-ok{% else %}status-failed{% endif %}">{{ item.status }}</span></div>
+                                {% endfor %}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if d.custom_checks %}
+                                {% for item in d.custom_checks %}
+                                    <div>{{ item.name }}: <span class="{% if item.status == 'OK' %}status-ok{% else %}status-failed{% endif %}">{{ item.status }}</span>
+                                        {% if item.details %}<span class="mono">{{ item.details }}</span>{% endif %}
+                                    </div>
+                                {% endfor %}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
+                        <td class="{% if d.overall_status == 'OK' %}status-ok{% elif d.overall_status == 'WARN' %}status-warn{% else %}status-failed{% endif %}">{{ d.overall_status }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="details-header">Issue Details</div>
+        <div class="table-wrapper details">
+            <table cellpadding="0" cellspacing="0">
+                <tbody>
+                    <tr class="plugin-row-header">
+                        <th>Severity</th>
+                        <th>Cluster</th>
+                        <th>Node</th>
+                        <th>Category</th>
+                        <th>Message</th>
+                        <th>Recommendation</th>
+                    </tr>
+                    {% if issues %}
+                        {% for issue in issues %}
+                        <tr class="plugin-row">
+                            <td><span class="badge" style="background: {{ issue.color }};">{{ issue.severity }}</span></td>
+                            <td>{{ issue.cluster }}</td>
+                            <td>{{ issue.node }}</td>
+                            <td>{{ issue.category }}</td>
+                            <td>{{ issue.message }}</td>
+                            <td>{{ issue.recommendation }}</td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr class="plugin-row">
+                            <td colspan="6" class="status-ok">No issues found.</td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>
