@@ -2,6 +2,28 @@
 
 OpsRadar is a production-oriented inspection platform built on FastAPI, PostgreSQL, Redis and Celery. The current production scope supports real Linux/Unix host inspection through SSH, encrypted resource credentials, RBAC, audit logs and report export.
 
+## Screenshots
+
+### Login
+
+![OpsRadar login](docs/screenshots/login.png)
+
+### Overview
+
+![OpsRadar overview](docs/screenshots/overview.png)
+
+### Task Center
+
+![OpsRadar task center](docs/screenshots/task-center.png)
+
+### Resource Inventory
+
+![OpsRadar resources](docs/screenshots/resources.png)
+
+### Inspection Templates
+
+![OpsRadar templates](docs/screenshots/templates.png)
+
 ## Production Deployment
 
 Prepare `.env` and TLS certificates:
