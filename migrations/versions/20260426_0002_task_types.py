@@ -31,11 +31,11 @@ def upgrade() -> None:
     op.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_task_types_key ON task_types (key)")
     op.execute(
         """
-        INSERT INTO task_types (id, key, name, enabled, description)
+        INSERT INTO task_types (id, key, name, enabled, description, created_at)
         VALUES
-            ('ttp_daily', 'daily', '日常巡检', true, '日常例行健康检查与可用性巡检'),
-            ('ttp_periodic', 'periodic', '周期巡检', true, '按计划周期执行的资源与模板巡检'),
-            ('ttp_compliance', 'compliance', '合规检查', true, '安全基线、等保和审计合规检查')
+            ('ttp_daily', 'daily', '日常巡检', true, '日常例行健康检查与可用性巡检', now()),
+            ('ttp_periodic', 'periodic', '周期巡检', true, '按计划周期执行的资源与模板巡检', now()),
+            ('ttp_compliance', 'compliance', '合规检查', true, '安全基线、等保和审计合规检查', now())
         ON CONFLICT (key) DO NOTHING
         """
     )
