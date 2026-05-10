@@ -304,8 +304,8 @@ const I18N = {
     "reports.history": "History Reports",
     "reports.weekly": "Weekly Reports",
     "reports.issues": "Abnormal Issues",
-    "templates.category": "Template Categories",
-    "templates.categoryDesc": "Group inspection templates by asset type and operations team.",
+    "templates.category": "Rule Set Management",
+    "templates.categoryDesc": "Bind rule sets to application environments and match checks by asset or discovered service type.",
     "templates.builtin": "Built-in Metrics",
     "templates.custom": "Custom Scripts",
     "templates.rules": "Judgement Rules",
@@ -694,8 +694,8 @@ const I18N = {
     "reports.history": "历史报告",
     "reports.weekly": "周报",
     "reports.issues": "异常问题",
-    "templates.category": "模板分类管理",
-    "templates.categoryDesc": "按主机、数据库、Web 资产等类型组织巡检模板。",
+    "templates.category": "规则集管理",
+    "templates.categoryDesc": "规则集绑定到应用环境，执行时按资产类型与发现服务自动命中。",
     "templates.builtin": "内置指标仓库",
     "templates.custom": "自定义脚本库",
     "templates.rules": "判定逻辑配置",
@@ -824,6 +824,7 @@ const state = {
   },
   environmentStatusFilter: "all",
   taskCreateDefaults: null,
+  taskCreateDraft: null,
   issueDetailId: null,
   issueDetailTab: "overview",
   tabs: {
@@ -1585,15 +1586,9 @@ function renderAiAssistantLauncher() {
   const name = settings.name || t("ai.assistant");
   const assistantState = state.floatingAssistant;
   const floatStyles = aiFloatingStyles();
-  const prompts = (settings.quick_prompts && settings.quick_prompts.length ? settings.quick_prompts : [
-    state.lang === "zh" ? "分析最新严重问题" : "Analyze latest critical issue",
-    state.lang === "zh" ? "查看今日巡检异常" : "Show today's inspection issues",
-    state.lang === "zh" ? "生成修复建议" : "Generate remediation suggestions",
-    state.lang === "zh" ? "查询应用健康度" : "Check application health",
-  ]).slice(0, 4);
   const messages = assistantState.messages.length
     ? assistantState.messages
-    : [{ role: "assistant", content: settings.welcome_message || t("ai.notConfigured"), default: true }];
+    : [{ role: "assistant", content: assistantWelcomeMessage(settings), default: true }];
   return `
     <aside class="ai-chat-window ${assistantState.open ? "open" : ""}" style="${escapeHtml(floatStyles.window)}" aria-label="${escapeHtml(name)}">
       <div class="ai-chat-head" data-ai-drag-handle="window">
@@ -1607,11 +1602,8 @@ function renderAiAssistantLauncher() {
         <button class="icon-button ai-chat-close" data-action="toggle-ai-assistant" title="${t("action.cancel")}">×</button>
       </div>
       <div class="ai-chat-messages">
-        ${messages.map((message) => aiChatMessageHtml(message)).join("")}
+        ${messages.map((message) => aiChatMessageHtml(message, "floating")).join("")}
         ${assistantState.typing ? aiTypingHtml() : ""}
-      </div>
-      <div class="ai-chat-prompts">
-        ${prompts.map((prompt) => `<button type="button" data-action="ai-quick-prompt" data-chat-scope="floating" data-prompt="${escapeHtml(prompt)}">${escapeHtml(prompt)}</button>`).join("")}
       </div>
       <div class="ai-chat-compose">
         <textarea id="ai-chat-input" rows="1" placeholder="${escapeHtml(t("ai.placeholder"))}"></textarea>
@@ -1657,12 +1649,12 @@ function aiBotIcon() {
   `;
 }
 
-function aiChatMessageHtml(message) {
+function aiChatMessageHtml(message, scope = "page") {
   const isUser = message.role === "user";
   return `
     <div class="ai-chat-row ${isUser ? "user" : "assistant"}">
       <div class="ai-chat-bubble">
-        <div class="ai-message-content">${isUser ? escapeHtml(message.content) : renderAssistantMarkdown(message.content)}</div>
+        <div class="ai-message-content">${isUser ? escapeHtml(message.content) : renderAssistantMarkdown(message.content, scope)}</div>
         <span>${escapeHtml(message.time || currentTimeLabel())}</span>
       </div>
     </div>
@@ -1675,7 +1667,7 @@ function inlineMarkdown(text) {
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
 }
 
-function renderAssistantMarkdown(content = "") {
+function renderAssistantMarkdown(content = "", scope = "page") {
   const lines = String(content || "").split(/\r?\n/);
   const html = [];
   let list = [];
@@ -1689,6 +1681,12 @@ function renderAssistantMarkdown(content = "") {
     const trimmed = line.trim();
     if (!trimmed) {
       flushList();
+      continue;
+    }
+    const prompt = trimmed.match(/^\[\s*(.+?)\s*\]$/);
+    if (prompt) {
+      flushList();
+      html.push(`<button type="button" class="ai-inline-prompt" data-action="ai-quick-prompt" data-chat-scope="${escapeHtml(scope)}" data-prompt="${escapeHtml(prompt[1])}">${escapeHtml(prompt[1])}</button>`);
       continue;
     }
     const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
@@ -1722,6 +1720,16 @@ function aiTypingHtml() {
 
 function currentTimeLabel() {
   return new Date().toLocaleTimeString(state.lang === "zh" ? "zh-CN" : "en-US", { hour: "2-digit", minute: "2-digit" });
+}
+
+function defaultAiWelcomeMessage() {
+  return state.lang === "zh"
+    ? "👋 你好，我是 OpsRadar AI 智能巡检助手\n\n我可以帮你分析巡检异常、定位问题原因、生成修复建议，也可以通过对话引导你创建巡检任务、添加资产、执行巡检并生成报告。\n\n你可以试着问我：\n[ 帮我给生产环境创建一次 JumpServer 集群巡检 ]\n[ 分析当前异常的可能原因 ]\n[ 根据巡检结果生成修复建议 ]"
+    : "👋 Hi, I am the OpsRadar AI inspection assistant.\n\nI can help analyze inspection anomalies, locate probable causes, generate remediation suggestions, and guide you through creating inspection tasks, adding assets, running inspections, and generating reports.\n\nTry asking:\n[ Create a JumpServer cluster inspection for production ]\n[ Analyze the likely cause of current anomalies ]\n[ Generate remediation suggestions from inspection results ]";
+}
+
+function assistantWelcomeMessage(settings = {}) {
+  return settings.welcome_message || defaultAiWelcomeMessage();
 }
 
 function renderLogin() {
@@ -2736,6 +2744,7 @@ function environmentMetricCounts(env) {
     services: services.length,
     issues: (overview.open_issues || []).length,
     latestTask: overview.latest_task || null,
+    latestStartedTask: overview.latest_started_task || null,
   };
 }
 
@@ -2764,7 +2773,7 @@ function renderEnvironmentCard(env) {
   const overview = env.overview || {};
   const score = overview.health_score;
   const counts = environmentMetricCounts(env);
-  const latestTaskTime = counts.latestTask?.created_at ? formatDate(counts.latestTask.created_at) : "-";
+  const latestTaskTime = counts.latestStartedTask?.started_at ? formatDate(counts.latestStartedTask.started_at) : "-";
   const app = applications().find((item) => item.id === env.application_id || item.name === env.application_name);
   return `
     <article class="environment-card">
@@ -2779,13 +2788,14 @@ function renderEnvironmentCard(env) {
         <div class="env-stat">${icon("apps")}<span>${state.lang === "zh" ? "资源" : "Resources"}</span><strong>${counts.resources}</strong></div>
         <div class="env-stat">${icon("server")}<span>${state.lang === "zh" ? "服务" : "Services"}</span><strong>${counts.services}</strong></div>
         <div class="env-stat ${counts.issues ? "warn" : ""}">${icon("alert")}<span>${state.lang === "zh" ? "异常" : "Issues"}</span><strong>${counts.issues}</strong></div>
-        <div class="env-stat">${icon("calendar")}<span>${state.lang === "zh" ? "最近巡检" : "Latest"}</span><strong>${escapeHtml(latestTaskTime)}</strong></div>
+        <div class="env-stat latest">${icon("calendar")}<span>${state.lang === "zh" ? "最近巡检" : "Latest"}</span><strong>${escapeHtml(latestTaskTime)}</strong></div>
       </div>
       ${environmentHealthBar(score)}
       <div class="env-card-actions split">
         <div class="env-primary-actions">
           ${environmentActionButton(env, "env-view-resources", state.lang === "zh" ? "查看资源" : "View resources")}
           ${environmentActionButton(env, "env-view-services", state.lang === "zh" ? "查看服务" : "View services")}
+          ${environmentActionButton(env, "bind-environment-rules", state.lang === "zh" ? "规则策略" : "Rule policy")}
           ${environmentActionButton(env, "env-create-task", state.lang === "zh" ? "创建巡检" : "Create task")}
         </div>
         <div class="env-secondary-actions">
@@ -2862,17 +2872,8 @@ function resourceServices(resourceId) {
   return (state.data.discovered_services || []).filter((service) => service.resource_id === resourceId);
 }
 
-function boundRuleIdsForResource(resource) {
-  const extra = resource?.extra_params || {};
-  return [...new Set([...(resource?.bound_rule_ids || []), ...(extra.bound_inspection_item_ids || [])].filter(Boolean))];
-}
-
 function serviceResource(service) {
   return (state.data.resources || []).find((resource) => resource.id === service?.service_resource_id);
-}
-
-function boundRuleIdsForService(service) {
-  return [...new Set([...(service?.bound_rule_ids || []), ...boundRuleIdsForResource(serviceResource(service))].filter(Boolean))];
 }
 
 function inspectionItemName(itemId) {
@@ -2880,32 +2881,59 @@ function inspectionItemName(itemId) {
   return item?.name || itemId;
 }
 
-function inspectionItemById(itemId) {
-  return (state.data.inspection_items || []).find((entry) => entry.id === itemId) || { id: itemId, name: itemId, category: "", command_type: "" };
+function ruleSetMatchesResource(ruleSet, resource) {
+  if (!ruleSet || !resource) return false;
+  const resourceTypes = new Set((ruleSet.resource_types || []).map(String).filter(Boolean));
+  const serviceTypes = new Set((ruleSet.service_types || []).map(String).filter(Boolean));
+  const extra = resource.extra_params || {};
+  const serviceKind = String(extra.service_kind || resource.service_kind || "");
+  const typeMatched = !resourceTypes.size || resourceTypes.has(String(resource.type || ""));
+  const serviceMatched = !serviceTypes.size || serviceTypes.has(serviceKind);
+  if (!typeMatched || !serviceMatched) return false;
+  const haystack = [
+    resource.name,
+    resource.type,
+    resource.ip,
+    resource.port,
+    serviceKind,
+    extra.container_name,
+    extra.compose_project,
+    extra.compose_service,
+    extra.systemd_unit,
+    extra.image,
+  ].filter(Boolean).join(" ").toLowerCase();
+  return !(ruleSet.exclude_keywords || []).some((keyword) => haystack.includes(String(keyword).toLowerCase()));
 }
 
-function boundRuleLabelsForService(service) {
-  return boundRuleIdsForService(service).map(inspectionItemName);
-}
-
-function serviceCredentialTargetLabel(target) {
-  const map = {
-    redis: "Redis",
-    mysql: "MySQL",
-    postgresql: "PostgreSQL",
-    pgsql: "PostgreSQL",
-    sqlserver: "SQL Server",
+function autoRuleIdsForTaskDraft(draft) {
+  const environmentId = draft.environment_id || "";
+  if (!environmentId) return new Set();
+  const env = environments().find((item) => item.id === environmentId);
+  const envRuleIds = new Set(env?.rule_set_ids || []);
+  if (!envRuleIds.size) return new Set();
+  const ruleSets = (state.data.rule_sets || []).filter((ruleSet) => envRuleIds.has(ruleSet.id) && ruleSet.enabled !== false);
+  const resources = new Map();
+  const addResource = (resource) => {
+    if (resource?.id) resources.set(resource.id, resource);
   };
-  return map[target] || (state.lang === "zh" ? "连接" : "Connection");
-}
-
-function serviceNeedsConnectionCredential(service, item) {
-  const category = String(item?.category || "").toLowerCase();
-  const commandType = String(item?.command_type || "").toLowerCase();
-  return Boolean(service?.requires_credentials) && (
-    ["redis", "mysql", "postgresql", "pgsql", "sqlserver", "database"].includes(category) ||
-    ["redis", "sql"].includes(commandType)
-  );
+  const scope = draft.inspection_scope || "environment";
+  if (scope === "environment") {
+    (env?.resources || []).map((binding) => binding.resource).forEach(addResource);
+  }
+  (draft.resource_ids || []).forEach((id) => addResource((state.data.resources || []).find((resource) => resource.id === id)));
+  (draft.service_ids || []).forEach((id) => {
+    const service = (state.data.discovered_services || []).find((item) => item.id === id);
+    addResource(serviceResource(service));
+  });
+  const ids = new Set();
+  resources.forEach((resource) => {
+    ruleSets.forEach((ruleSet) => {
+      if (ruleSetMatchesResource(ruleSet, resource)) {
+        (ruleSet.item_ids || ruleSet.items || []).forEach((itemId) => ids.add(itemId));
+      }
+    });
+  });
+  return ids;
 }
 
 function resourceServiceButton(res) {
@@ -2996,7 +3024,6 @@ function renderResourceListPanel() {
                 ${columns.map(([key]) => resourceCell(res, key)).join("")}
                 <td class="toolbar">
                   <button class="btn small" data-action="edit-resource" data-id="${res.id}">${t("action.edit")}</button>
-                  <button class="btn small" data-action="bind-resource-rules" data-id="${res.id}">${state.lang === "zh" ? "绑定规则" : "Bind rules"}</button>
                   ${resourceTestButton(res)}
                   ${["host", "linux", "server"].includes(res.type) ? resourceServiceButton(res) : ""}
                 </td>
@@ -3039,7 +3066,6 @@ function renderResourceServiceRow(resource, colspan) {
 }
 
 function renderDiscoveredServiceCard(service) {
-  const credentialLabel = serviceCredentialTargetLabel(service.credential_target);
   return `
     <article class="discovered-service-card">
       <div class="service-kind ${escapeHtml(service.discovery_type)}">${serviceTypeLabel(service.discovery_type)}</div>
@@ -3048,7 +3074,6 @@ function renderDiscoveredServiceCard(service) {
         <small>${escapeHtml([service.image, service.systemd_unit, service.port ? `${service.port}/${service.protocol || "tcp"}` : ""].filter(Boolean).join(" · ") || service.identity)}</small>
       </div>
       <div class="service-card-actions">
-        ${service.requires_credentials ? `<button class="btn micro ${service.service_credential_configured ? "" : "primary"}" type="button" data-action="configure-service-credential" data-id="${escapeHtml(service.id)}">${escapeHtml(service.service_credential_configured ? (state.lang === "zh" ? "更新凭据" : "Update credential") : (state.lang === "zh" ? "配置凭据" : "Configure credential"))}</button>` : ""}
         <button class="btn micro danger" type="button" data-action="delete-discovered-service" data-id="${escapeHtml(service.id)}">${state.lang === "zh" ? "删除" : "Delete"}</button>
       </div>
     </article>
@@ -3193,7 +3218,7 @@ function renderTaskList() {
               ${pageInfo.items.map((task) => `
                 <tr>
                   <td class="select-col">${checkboxCell("tasks", rowBulkId(task))}</td>
-                  <td><strong>${escapeHtml(task.name)}</strong><div class="muted mono">${escapeHtml(task.id)}</div><div class="muted">${escapeHtml(task.target || "")}</div></td>
+                  <td><strong>${escapeHtml(task.name)}</strong><div class="muted">${escapeHtml(task.target || "")}</div></td>
                   <td>${escapeHtml(task.owner)}</td>
                   <td>${formatDate(task.schedule)}</td>
                   <td>${taskProgressBar(task.progress)}</td>
@@ -3310,7 +3335,7 @@ function renderReportHistory() {
             ${pageInfo.items.map((task) => `
               <tr>
                 <td class="select-col">${checkboxCell("reports", task.id)}</td>
-                <td><strong>${escapeHtml(task.name)}</strong><div class="muted mono">${escapeHtml(task.id)}</div></td>
+                <td><strong>${escapeHtml(task.name)}</strong><div class="muted">${escapeHtml(task.environment_name ? `${displayApplicationName(task.application_name)} / ${task.environment_name}` : statusText(task.status))}</div></td>
                 <td><span class="status ${statusClass(task.status)}">${statusText(task.status)}</span></td>
                 <td>${summaryText(task.summary)}</td>
                 <td>${formatDate(task.finished_at)}</td>
@@ -3751,8 +3776,18 @@ function resourceTypeForTemplateCategory(category) {
   }[category] || "host";
 }
 
+function ruleSetTargetLabel(ruleSet) {
+  const types = (ruleSet.resource_types || []).length ? (ruleSet.resource_types || []).join(", ") : "-";
+  const services = (ruleSet.service_types || []).length ? (ruleSet.service_types || []).join(", ") : "";
+  if (ruleSet.target_kind === "service") {
+    return state.lang === "zh" ? `服务：${services || types}` : `Service: ${services || types}`;
+  }
+  return state.lang === "zh" ? `资源：${types}` : `Resource: ${types}`;
+}
+
 function renderTemplates() {
   state.tabs.templates = state.tabs.templates || "builtin";
+  if (!["category", "builtin", "custom", "rules"].includes(state.tabs.templates)) state.tabs.templates = "category";
   const customCount = state.data.inspection_items.filter((item) => !item.is_builtin).length;
   return `
     <div class="template-module">
@@ -3762,40 +3797,62 @@ function renderTemplates() {
           ["builtin", t("templates.builtin"), state.data.inspection_items.filter((item) => item.is_builtin).length],
           ["custom", t("templates.custom"), customCount],
           ["rules", t("templates.rules")],
-          ["bindings", t("templates.bindings")],
         ])}
       </div>
       ${state.tabs.templates === "category" ? renderTemplateCategories() : ""}
       ${state.tabs.templates === "builtin" ? renderBuiltinTemplates() : ""}
       ${state.tabs.templates === "custom" ? renderCustomTemplates() : ""}
       ${state.tabs.templates === "rules" ? renderTemplateRules() : ""}
-      ${state.tabs.templates === "bindings" ? renderTemplateBindings() : ""}
     </div>
   `;
 }
 
 function renderTemplateCategories() {
-  const groups = [
-    [templateCategoryLabel("os"), ["CPU 使用率", "内存占用", "磁盘空间 / inode", "系统负载", "网络延迟", "弱口令扫描", "SSH 暴露", "异常监听端口", "sudo 权限", "敏感文件权限", "ssh 登录日志", "ssh 账号安全", "密码策略", "auditd", "防火墙策略"], ""],
-    [templateCategoryLabel("postgresql"), ["连接数占比", "慢查询", "主从同步延迟", "pg_hba 访问基线", "日志审计开启", "高危权限账户"], "database"],
-    [templateCategoryLabel("mysql"), ["连接数占比", "慢查询", "死锁监测", "匿名访问禁用", "local_infile 禁用", "日志审计开启"], "database"],
-    [templateCategoryLabel("redis"), ["内存占用", "连接数占比", "慢查询", "匿名访问禁用", "protected-mode"], "database"],
-    [templateCategoryLabel("container"), ["Docker 存活", "K8s 存活", "特权容器", "镜像漏洞与来源", "Kubernetes RBAC", "K8s API 匿名访问"], "container"],
-    [templateCategoryLabel("middleware"), ["SSL 有效期", "HTTP 状态码", "WAF 状态", "暗链检测", "跨域策略", "重定向跳转校验", "正则解析", "JSON 解析", "布尔判断"], "middleware"],
-  ];
-  const kindGroups = [
-    [templateKindLabel("standard"), ["可用性", "性能状态", "容量水位", "连接压力", "响应时间", "服务存活"], ""],
-    [templateKindLabel("cis"), ["主机 CIS", "Docker CIS", "Kubernetes CIS", "PostgreSQL CIS", "MySQL CIS", "Redis 安全基线"], "security"],
-    [templateKindLabel("security"), ["弱口令", "SSH 暴露", "异常端口", "高危权限", "WAF", "暗链检测", "跨域策略"], "security"],
-    [templateKindLabel("compliance"), ["日志留存", "账号审计", "补丁检查", "安全传输", "敏感路径", "权限最小化"], "custom"],
-    [templateKindLabel("custom"), ["Shell 脚本", "Python 脚本", "SQL 脚本", "正则解析", "JSON 解析", "布尔判断"], "custom"],
-  ];
+  const rows = state.data.rule_sets || [];
+  const filtered = filterRows("rule-sets", rows, ["name", "description", "target_kind", "resource_types", "service_types"]);
+  const pageInfo = paginate("rule-sets", filtered);
+  const createButton = hasPermission("templates:create")
+    ? `<button class="btn primary small" data-action="add-rule-set">${state.lang === "zh" ? "新增规则集" : "Add rule set"}</button>`
+    : "";
   return `
-    <div class="module-pane template-overview">
-      <div class="template-section-label">${state.lang === "zh" ? "对象分类" : "Target Categories"}</div>
-      ${groups.map(([title, items, tone]) => templateMetricGroup(title, items, tone)).join("")}
-      <div class="template-section-label">${state.lang === "zh" ? "检查类型分类" : "Check Type Categories"}</div>
-      ${kindGroups.map(([title, items, tone]) => templateMetricGroup(title, items, tone)).join("")}
+    <div class="module-pane">
+      ${tableToolbar("rule-sets", "", "", filtered.length, createButton, false)}
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>${state.lang === "zh" ? "规则集名称" : "Rule Set"}</th>
+              <th>${state.lang === "zh" ? "适用对象" : "Target"}</th>
+              <th>${state.lang === "zh" ? "适用条件" : "Conditions"}</th>
+              <th>${state.lang === "zh" ? "规则项" : "Items"}</th>
+              <th>${t("table.status")}</th>
+              <th>${t("table.actions")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pageInfo.items.map((ruleSet) => {
+              const itemIds = ruleSet.item_ids || ruleSet.items || [];
+              const target = ruleSetTargetLabel(ruleSet);
+              const condition = [
+                (ruleSet.resource_types || []).length ? `${state.lang === "zh" ? "资源" : "Resources"}: ${ruleSet.resource_types.join(", ")}` : "",
+                (ruleSet.service_types || []).length ? `${state.lang === "zh" ? "服务" : "Services"}: ${ruleSet.service_types.join(", ")}` : "",
+                (ruleSet.exclude_keywords || []).length ? `${state.lang === "zh" ? "排除" : "Exclude"}: ${ruleSet.exclude_keywords.join(", ")}` : "",
+              ].filter(Boolean).join(" · ") || (state.lang === "zh" ? "全部匹配" : "Match all");
+              return `
+                <tr>
+                  <td><strong>${escapeHtml(ruleSet.name)}</strong><div class="muted">${escapeHtml(ruleSet.description || "")}</div></td>
+                  <td>${escapeHtml(target)}</td>
+                  <td>${escapeHtml(condition)}</td>
+                  <td><span class="status pending">${itemIds.length}</span><div class="muted">${escapeHtml(itemIds.slice(0, 3).map(inspectionItemName).join(" / ") || "-")}${itemIds.length > 3 ? " ..." : ""}</div></td>
+                  <td><span class="status ${ruleSet.enabled === false ? "pending" : "success"}">${ruleSet.enabled === false ? (state.lang === "zh" ? "停用" : "Disabled") : (state.lang === "zh" ? "启用" : "Enabled")}</span></td>
+                  <td>${hasPermission("templates:update") ? `<button class="btn small" data-action="edit-rule-set" data-id="${escapeHtml(ruleSet.id)}">${t("action.edit")}</button>` : ""}</td>
+                </tr>
+              `;
+            }).join("") || `<tr><td colspan="6"><div class="empty">${t("search.empty")}</div></td></tr>`}
+          </tbody>
+        </table>
+      </div>
+      ${pagination("rule-sets", pageInfo)}
     </div>
   `;
 }
@@ -3980,17 +4037,11 @@ function renderAiAssistant() {
   const assistantState = state.aiAssistant;
   const messages = assistantState.messages.length
     ? assistantState.messages
-    : [{ role: "assistant", content: settings.welcome_message || t("ai.notConfigured"), time: currentTimeLabel() }];
+    : [{ role: "assistant", content: assistantWelcomeMessage(settings), time: currentTimeLabel() }];
   const userMessages = assistantState.messages.filter((message) => message.role === "user");
   const lastMessage = assistantState.messages[assistantState.messages.length - 1];
   const sessionTitle = assistantState.title || userMessages[0]?.content?.slice(0, 28) || (state.lang === "zh" ? "当前会话" : "Current session");
   const hasSession = Boolean(assistantState.sessionId || assistantState.messages.length);
-  const prompts = (settings.quick_prompts && settings.quick_prompts.length ? settings.quick_prompts : [
-    state.lang === "zh" ? "总结当前异常的可能原因" : "Summarize likely causes",
-    state.lang === "zh" ? "查询最近 1 小时错误日志" : "Query errors in the last hour",
-    state.lang === "zh" ? "生成人工排障步骤" : "Generate troubleshooting steps",
-    state.lang === "zh" ? "分析高危问题" : "Analyze high-risk issues",
-  ]).slice(0, 4);
   const sessionGroups = groupAiSessions(assistantState.sessions || []);
   return `
     <div class="ai-assistant-workbench" style="--ai-session-width:${Math.max(150, Math.min(360, assistantState.sidebarWidth || 176))}px">
@@ -4023,11 +4074,8 @@ function renderAiAssistant() {
             <button class="btn small" data-action="edit-ai-assistant">${state.lang === "zh" ? "设置" : "Settings"}</button>
           </div>
         </div>
-        <div class="ai-prompt-grid">
-          ${prompts.map((prompt) => `<button type="button" data-action="ai-quick-prompt" data-chat-scope="page" data-prompt="${escapeHtml(prompt)}">${icon(prompt.includes("日志") || prompt.includes("log") ? "audit" : "trend")} ${escapeHtml(prompt)}</button>`).join("")}
-        </div>
         <div class="ai-conversation-panel">
-          ${messages.map((message) => aiChatMessageHtml(message)).join("")}
+          ${messages.map((message) => aiChatMessageHtml(message, "page")).join("")}
           ${assistantState.typing ? aiTypingHtml() : ""}
         </div>
         <div class="ai-page-composer">
@@ -4700,30 +4748,33 @@ function fieldGroupedCheckboxGroup(label, name, options, emptyText = "", require
   `;
 }
 
-function applyBoundRulesToTaskForm(form) {
-  if (!form || form.dataset.type !== "task-create") return;
+function collectTaskCreateDraft(form) {
   const formData = new FormData(form);
-  const ruleIds = new Set();
-  const addResourceRules = (resourceId) => {
-    const resource = (state.data.resources || []).find((item) => item.id === resourceId);
-    boundRuleIdsForResource(resource).forEach((id) => ruleIds.add(id));
+  const values = Object.fromEntries(formData.entries());
+  return {
+    ...values,
+    resource_ids: formData.getAll("resource_ids"),
+    service_ids: formData.getAll("service_ids"),
+    item_ids: formData.getAll("item_ids"),
+    notify_channels: formData.getAll("notify_channels"),
+    reminder_rules: formData.getAll("reminder_rules"),
   };
-  formData.getAll("resource_ids").forEach(addResourceRules);
-  formData.getAll("service_ids").forEach((serviceId) => {
-    const service = (state.data.discovered_services || []).find((item) => item.id === serviceId);
-    boundRuleIdsForService(service).forEach((id) => ruleIds.add(id));
-  });
-  const environmentId = formData.get("environment_id");
-  if (environmentId) {
-    environmentResourceBindings()
-      .filter((binding) => binding.environment_id === environmentId)
-      .map((binding) => binding.resource_id)
-      .forEach(addResourceRules);
+}
+
+function applyBoundRulesToTaskForm(form, { replace = false } = {}) {
+  if (!form || form.dataset.type !== "task-create") return;
+  const draft = collectTaskCreateDraft(form);
+  const boxes = [...form.querySelectorAll('input[name="item_ids"]')];
+  if (!replace && boxes.some((box) => box.checked)) {
+    state.taskCreateDraft = draft;
+    return;
   }
+  const ruleIds = autoRuleIdsForTaskDraft(draft);
   if (!ruleIds.size) return;
-  form.querySelectorAll('input[name="item_ids"]').forEach((box) => {
-    if (ruleIds.has(box.value)) box.checked = true;
+  boxes.forEach((box) => {
+    box.checked = ruleIds.has(box.value);
   });
+  state.taskCreateDraft = collectTaskCreateDraft(form);
 }
 
 function fieldInlineChecks(label, name, options) {
@@ -4887,19 +4938,22 @@ function modalConfig(type, id) {
     const task = isNew ? null : editingPlan ? state.data.cron_plans.find((item) => item.id === String(id).slice(5)) : state.data.tasks.find((item) => item.id === id);
     const config = task?.config || task?.notification_config || {};
     const defaults = isNew ? (state.taskCreateDefaults || {}) : {};
-    const selectedResourceIds = new Set(task?.resource_ids || []);
-    const selectedItemIds = new Set(task?.item_ids || []);
-    const selectedNotify = new Set(config.notify_channels || []);
-    const selectedReminders = new Set(config.reminder_rules || []);
-    const executionMode = editingPlan ? "periodic" : config.execution_mode || "once";
-    const inspectionScope = defaults.inspection_scope || config.inspection_scope || (task?.environment_id ? "environment" : "asset");
-    const selectedTaskTags = Array.isArray(config.task_tags) ? config.task_tags.join("，") : "";
-    const selectedServiceIds = new Set(config.service_ids || []);
+    const draft = state.taskCreateDraft || {};
+    const selectedEnvironmentId = draft.environment_id || task?.environment_id || config.environment_id || defaults.environment_id || "";
+    const selectedResourceIds = new Set(draft.resource_ids || task?.resource_ids || []);
+    const selectedServiceIds = new Set(draft.service_ids || config.service_ids || []);
+    const executionMode = editingPlan ? "periodic" : draft.execution_mode || config.execution_mode || "once";
+    const inspectionScope = draft.inspection_scope || defaults.inspection_scope || config.inspection_scope || (task?.environment_id ? "environment" : "asset");
+    const autoItemIds = autoRuleIdsForTaskDraft({ ...draft, environment_id: selectedEnvironmentId, inspection_scope: inspectionScope, resource_ids: [...selectedResourceIds], service_ids: [...selectedServiceIds] });
+    const selectedItemIds = new Set((draft.item_ids && draft.item_ids.length ? draft.item_ids : task?.item_ids || [...autoItemIds]));
+    const selectedNotify = new Set(draft.notify_channels || config.notify_channels || []);
+    const selectedReminders = new Set(draft.reminder_rules || config.reminder_rules || []);
+    const selectedTaskTags = draft.task_tags ?? (Array.isArray(config.task_tags) ? config.task_tags.join("，") : "");
     const environmentCardOptions = environments().map((env) => ({
       value: env.id,
       label: `${displayApplicationName(env.application_name)} / ${env.name}`,
       meta: `${env.env_type || "-"} / ${env.owner || "SRE"} / ${state.lang === "zh" ? "资源" : "resources"} ${(env.resources || []).length}`,
-        checked: (task?.environment_id || config.environment_id || defaults.environment_id || "") === env.id,
+        checked: selectedEnvironmentId === env.id,
     }));
     const resourceOptions = (state.data.resources || [])
       .filter((resource) => !(resource.extra_params || {}).parent_resource_id)
@@ -4936,9 +4990,9 @@ function modalConfig(type, id) {
       body: [
         taskWizardHeader(),
         taskWizardPane(1, t("form.basicInfo"), [
-          fieldInput(t("form.taskName"), "name", task?.name || "", "text", "required"),
+          fieldInput(t("form.taskName"), "name", draft.name ?? task?.name ?? defaults.name ?? "", "text", "required"),
           fieldInput(t("form.taskTags"), "task_tags", selectedTaskTags, "text", `placeholder="${state.lang === "zh" ? "如：生产环境、核心系统、数据库，逗号分隔" : "e.g. production, core, database"}"`),
-          fieldTextarea(t("form.taskDescription"), "description", task?.description || config.description || "", `placeholder="${state.lang === "zh" ? "填写任务背景、检查目标或注意事项" : "Task background, target or notes"}"`),
+          fieldTextarea(t("form.taskDescription"), "description", draft.description ?? task?.description ?? config.description ?? "", `placeholder="${state.lang === "zh" ? "填写任务背景、检查目标或注意事项" : "Task background, target or notes"}"`),
         ].join("")),
         taskWizardPane(2, state.lang === "zh" ? "巡检范围" : "Inspection Scope", [
           fieldRadioGroup(state.lang === "zh" ? "巡检范围" : "Scope", "inspection_scope", inspectionScope, [
@@ -4953,14 +5007,14 @@ function modalConfig(type, id) {
         taskWizardPane(3, t("form.executionConfig"), [
           fieldRadioGroup(t("form.executionMode"), "execution_mode", executionMode, [["once", t("form.once")], ["periodic", t("form.periodic")]], true),
           `<div class="periodic-only">${[
-            fieldRadioGroup(t("form.scheduleRule"), "schedule_rule", config.schedule_rule || "daily", [["daily", t("form.daily")], ["weekly", t("form.weekly")], ["monthly", t("form.monthly")]], true),
-            fieldInput(t("form.scheduleTime"), "schedule_time", config.schedule_time || "09:00", "time", "required"),
-            fieldInput(t("form.effectiveStart"), "effective_start", config.effective_start || "", "date"),
-            fieldInput(t("form.effectiveEnd"), "effective_end", config.effective_end || "", "date"),
-            fieldSelect(t("form.deadlinePolicy"), "deadline_policy", config.deadline_policy || "1h", [["1h", state.lang === "zh" ? "1 小时内" : "Within 1 hour"], ["4h", state.lang === "zh" ? "4 小时内" : "Within 4 hours"], ["24h", state.lang === "zh" ? "24 小时内" : "Within 24 hours"]], "required"),
-            fieldSelect(t("form.retryPolicy"), "retry_policy", config.retry_policy || "retry_once", [["none", state.lang === "zh" ? "不重试" : "No retry"], ["retry_once", state.lang === "zh" ? "自动重试 1 次" : "Retry once"], ["retry_twice", state.lang === "zh" ? "自动重试 2 次" : "Retry twice"]], "required"),
+            fieldRadioGroup(t("form.scheduleRule"), "schedule_rule", draft.schedule_rule || config.schedule_rule || "daily", [["daily", t("form.daily")], ["weekly", t("form.weekly")], ["monthly", t("form.monthly")]], true),
+            fieldInput(t("form.scheduleTime"), "schedule_time", draft.schedule_time || config.schedule_time || "09:00", "time", "required"),
+            fieldInput(t("form.effectiveStart"), "effective_start", draft.effective_start ?? config.effective_start ?? "", "date"),
+            fieldInput(t("form.effectiveEnd"), "effective_end", draft.effective_end ?? config.effective_end ?? "", "date"),
+            fieldSelect(t("form.deadlinePolicy"), "deadline_policy", draft.deadline_policy || config.deadline_policy || "1h", [["1h", state.lang === "zh" ? "1 小时内" : "Within 1 hour"], ["4h", state.lang === "zh" ? "4 小时内" : "Within 4 hours"], ["24h", state.lang === "zh" ? "24 小时内" : "Within 24 hours"]], "required"),
+            fieldSelect(t("form.retryPolicy"), "retry_policy", draft.retry_policy || config.retry_policy || "retry_once", [["none", state.lang === "zh" ? "不重试" : "No retry"], ["retry_once", state.lang === "zh" ? "自动重试 1 次" : "Retry once"], ["retry_twice", state.lang === "zh" ? "自动重试 2 次" : "Retry twice"]], "required"),
           ].join("")}</div>`,
-          fieldSelect(t("form.owner"), "owner_id", task?.created_by || config.owner_id || state.user?.id || "", userOptions.length ? userOptions : [[state.user?.id || "", state.user?.display_name || "Admin"]], "required").replace('class="field"', 'class="field wide"'),
+          fieldSelect(t("form.owner"), "owner_id", draft.owner_id || task?.created_by || config.owner_id || state.user?.id || "", userOptions.length ? userOptions : [[state.user?.id || "", state.user?.display_name || "Admin"]], "required").replace('class="field"', 'class="field wide"'),
           fieldInlineChecks(t("form.notifyChannels"), "notify_channels", [
             { value: "site", label: state.lang === "zh" ? "站内通知" : "In-app", checked: selectedNotify.has("site") },
             { value: "email", label: state.lang === "zh" ? "邮件" : "Email", checked: selectedNotify.has("email") },
@@ -4973,8 +5027,9 @@ function modalConfig(type, id) {
           ]),
         ].join("")),
         taskWizardPane(4, state.lang === "zh" ? "巡检指标" : "Inspection Metrics", [
-          fieldGroupedCheckboxGroup("", "item_ids", itemOptions, t("form.noInspectionItems"), true),
-          fieldTextarea(t("form.note"), "note", config.note || "", `maxlength="300" placeholder="${state.lang === "zh" ? "请输入备注信息，如任务背景、注意事项等" : "Optional note"}"`),
+          `<div class="field wide"><div class="modal-hint">${state.lang === "zh" ? "按环境创建时可留空，系统会根据应用环境绑定的规则集、资产类型和服务发现标签自动匹配；也可以在这里手动勾选覆盖本次任务。" : "For environment-scoped tasks, leave this empty to auto-match environment rule sets by resource type and service discovery tags. You can also select items manually for this task."}</div></div>`,
+          fieldGroupedCheckboxGroup("", "item_ids", itemOptions, t("form.noInspectionItems"), false),
+          fieldTextarea(t("form.note"), "note", draft.note ?? config.note ?? "", `maxlength="300" placeholder="${state.lang === "zh" ? "请输入备注信息，如任务背景、注意事项等" : "Optional note"}"`),
         ].join("")),
       ].join(""),
       extraActions: `
@@ -4983,10 +5038,43 @@ function modalConfig(type, id) {
       `,
     };
   }
-  if (type === "resource-rules") {
-    const resource = (state.data.resources || []).find((item) => item.id === id);
-    if (!resource) return null;
-    const selected = new Set(boundRuleIdsForResource(resource));
+  if (type === "environment-rules") {
+    const env = environments().find((item) => item.id === id);
+    if (!env) return null;
+    const selected = new Set(env.rule_set_ids || []);
+    const ruleOptions = (state.data.rule_sets || [])
+      .filter((ruleSet) => ruleSet.enabled !== false)
+      .map((ruleSet) => ({
+        value: ruleSet.id,
+        label: ruleSet.name,
+        meta: `${ruleSetTargetLabel(ruleSet)} / ${(ruleSet.item_ids || ruleSet.items || []).length} 项`,
+        checked: selected.has(ruleSet.id),
+      }));
+    return {
+      title: state.lang === "zh" ? "绑定规则策略" : "Bind Rule Policy",
+      subtitle: environmentName(id),
+      submitLabel: t("action.save"),
+      body: [
+        `<div class="field wide"><div class="modal-hint">${state.lang === "zh" ? "规则集绑定到应用环境。创建巡检任务时，系统会按资产类型、服务发现类型和排除条件自动匹配，只有命中的规则才会执行。" : "Rule sets are bound to the application environment. Tasks automatically match them by resource type, discovered service type and exclusions."}</div></div>`,
+        fieldCheckboxGroup(state.lang === "zh" ? "规则集" : "Rule sets", "rule_set_ids", ruleOptions, state.lang === "zh" ? "暂无规则集，请先在巡检模板中维护规则集。" : "No rule sets available.", true),
+      ].join(""),
+    };
+  }
+  if (type === "rule-set") {
+    const isNew = id === "new";
+    const ruleSet = isNew ? {
+      name: "",
+      description: "",
+      target_kind: "resource",
+      resource_types: [],
+      service_types: [],
+      conditions: {},
+      exclude_keywords: [],
+      item_ids: [],
+      enabled: true,
+    } : (state.data.rule_sets || []).find((item) => item.id === id);
+    if (!ruleSet) return null;
+    const selected = new Set(ruleSet.item_ids || ruleSet.items || []);
     const itemOptions = (state.data.inspection_items || [])
       .filter((item) => item.enabled !== false)
       .map((item) => ({
@@ -4997,12 +5085,18 @@ function modalConfig(type, id) {
         checked: selected.has(item.id),
       }));
     return {
-      title: state.lang === "zh" ? "绑定巡检规则" : "Bind Inspection Rules",
-      subtitle: resource.name,
+      title: isNew ? (state.lang === "zh" ? "新增规则集" : "Add Rule Set") : (state.lang === "zh" ? "编辑规则集" : "Edit Rule Set"),
+      subtitle: state.lang === "zh" ? "规则集会绑定到应用环境，执行时自动匹配资产和服务。" : "Rule sets bind to application environments and auto-match resources/services at runtime.",
       submitLabel: t("action.save"),
       body: [
-        `<div class="field wide"><div class="modal-hint">${state.lang === "zh" ? "这些规则会作为默认规则，在创建巡检任务选择该资源或服务时自动带出，仍可临时勾选、取消或追加。" : "These defaults are preselected when creating tasks for this resource or service. Users can still adjust them per task."}</div></div>`,
-        fieldGroupedCheckboxGroup("", "inspection_item_ids", itemOptions, t("form.noInspectionItems"), false),
+        fieldInput(state.lang === "zh" ? "规则集名称" : "Rule set name", "name", ruleSet.name || "", "text", "required"),
+        fieldSelect(state.lang === "zh" ? "适用对象" : "Target kind", "target_kind", ruleSet.target_kind || "resource", [["resource", state.lang === "zh" ? "资产" : "Resource"], ["service", state.lang === "zh" ? "发现服务" : "Discovered service"], ["all", state.lang === "zh" ? "全部" : "All"]], "required"),
+        fieldInput(state.lang === "zh" ? "资源类型" : "Resource types", "resource_types", (ruleSet.resource_types || []).join(","), "text", `placeholder="host,mysql,redis,container"`),
+        fieldInput(state.lang === "zh" ? "服务发现类型" : "Service discovery types", "service_types", (ruleSet.service_types || []).join(","), "text", `placeholder="docker_container,docker_compose,systemd"`),
+        fieldInput(state.lang === "zh" ? "排除关键字" : "Exclude keywords", "exclude_keywords", (ruleSet.exclude_keywords || []).join(","), "text", `placeholder="${state.lang === "zh" ? "如：debug,temp；逗号分隔" : "e.g. debug,temp; comma separated"}"`),
+        fieldTextarea(state.lang === "zh" ? "描述" : "Description", "description", ruleSet.description || ""),
+        fieldInlineChecks(state.lang === "zh" ? "状态" : "Status", "enabled", [{ value: "true", label: state.lang === "zh" ? "启用" : "Enabled", checked: ruleSet.enabled !== false }]),
+        fieldGroupedCheckboxGroup(state.lang === "zh" ? "包含规则项" : "Inspection items", "item_ids", itemOptions, t("form.noInspectionItems"), false),
       ].join(""),
     };
   }
@@ -5023,20 +5117,6 @@ function modalConfig(type, id) {
         fieldInlineChecks(state.lang === "zh" ? "发现类型" : "Discovery types", "discovery_types", typeChecks),
         fieldInput(state.lang === "zh" ? "仅包含关键字" : "Include keywords", "include_keywords", "", "text", `placeholder="${state.lang === "zh" ? "如：nginx,redis,jumpserver；为空表示不过滤" : "e.g. nginx,redis,jumpserver; empty means all"}"`),
         fieldInput(state.lang === "zh" ? "排除关键字" : "Exclude keywords", "exclude_keywords", "systemd-,dbus,session,user@", "text", `placeholder="${state.lang === "zh" ? "如：dbus,session,user@；逗号分隔" : "e.g. dbus,session,user@; comma separated"}"`),
-      ].join(""),
-    };
-  }
-  if (type === "service-credential") {
-    const service = (state.data.discovered_services || []).find((item) => item.id === id);
-    if (!service) return null;
-    const label = serviceCredentialTargetLabel(service.credential_target);
-    return {
-      title: state.lang === "zh" ? "配置服务凭据" : "Configure Service Credential",
-      subtitle: `${service.name} · ${label}`,
-      submitLabel: service.service_credential_configured ? t("action.save") : (state.lang === "zh" ? "保存凭据" : "Save credential"),
-      body: [
-        fieldInput("Username", "username", "", "text", `placeholder="${state.lang === "zh" ? "可选，例如 default / root / app_user" : "Optional, such as default / root / app_user"}"`),
-        fieldTextarea(state.lang === "zh" ? "密码 / Token" : "Password / Token", "credential_secret", "", `required placeholder="${state.lang === "zh" ? "仅保存加密后的连接凭据，不会在页面回显" : "Stored encrypted and never displayed again"}"`),
       ].join(""),
     };
   }
@@ -5154,8 +5234,7 @@ function modalConfig(type, id) {
         fieldSelect(t("form.status"), "enabled", String(Boolean(settings.enabled)), [["true", t("label.enabled")], ["false", t("label.disabled")]], "required"),
         fieldSelect(state.lang === "zh" ? "对话模型" : "Chat Model", "model_id", settings.model_id || "", modelOptions),
         fieldInput(t("table.name"), "name", settings.name || "OpsRadar AI", "text", "required"),
-        fieldTextarea(state.lang === "zh" ? "欢迎语" : "Welcome Message", "welcome_message", settings.welcome_message || ""),
-        fieldTextarea(t("ai.quickPrompts"), "quick_prompts", (settings.quick_prompts || []).join("\n"), `placeholder="${state.lang === "zh" ? "每行一个快捷问题" : "One quick prompt per line"}"`),
+        fieldTextarea(state.lang === "zh" ? "欢迎语" : "Welcome Message", "welcome_message", settings.welcome_message || defaultAiWelcomeMessage(), `placeholder="${state.lang === "zh" ? "可使用 [问题] 语法添加可点击示例问题" : "Use [question] syntax to add clickable examples"}"`),
       ].join(""),
     };
   }
@@ -5282,14 +5361,20 @@ function modalConfig(type, id) {
 }
 
 function openModal(type, id) {
-  if (type === "task-create") state.taskCreateStep = 1;
+  if (type === "task-create") {
+    state.taskCreateStep = 1;
+    state.taskCreateDraft = null;
+  }
   if (type !== "task-create") state.taskCreateDefaults = null;
   state.modal = { type, id };
   render();
 }
 
 function closeModal() {
-  if (state.modal?.type === "task-create") state.taskCreateDefaults = null;
+  if (state.modal?.type === "task-create") {
+    state.taskCreateDefaults = null;
+    state.taskCreateDraft = null;
+  }
   state.modal = null;
   render();
 }
@@ -5391,6 +5476,14 @@ function assistantStateFor(scope = "page") {
   return scope === "floating" ? state.floatingAssistant : state.aiAssistant;
 }
 
+function scrollAiChatToBottom(scope = "page") {
+  requestAnimationFrame(() => {
+    const selector = scope === "floating" ? ".ai-chat-messages" : ".ai-conversation-panel";
+    const messages = document.querySelector(selector);
+    if (messages) messages.scrollTop = messages.scrollHeight;
+  });
+}
+
 function toggleAiAssistant(open = null) {
   const assistant = state.floatingAssistant;
   assistant.open = open === null ? !assistant.open : Boolean(open);
@@ -5399,8 +5492,7 @@ function toggleAiAssistant(open = null) {
     requestAnimationFrame(() => {
       const input = document.getElementById("ai-chat-input");
       input?.focus();
-      const messages = document.querySelector(".ai-chat-messages");
-      if (messages) messages.scrollTop = messages.scrollHeight;
+      scrollAiChatToBottom("floating");
     });
   }
 }
@@ -5425,6 +5517,7 @@ async function loadAiChatSession(sessionId) {
   }));
   state.aiAssistant.typing = false;
   render();
+  scrollAiChatToBottom("page");
 }
 
 async function sendAiChat(message, scope = "page") {
@@ -5436,6 +5529,7 @@ async function sendAiChat(message, scope = "page") {
   assistant.messages.push({ role: "user", content: text, time: currentTimeLabel() });
   assistant.typing = true;
   render();
+  scrollAiChatToBottom(scope);
   try {
     const response = await api("/api/ai/chat", {
       method: "POST",
@@ -5456,6 +5550,7 @@ async function sendAiChat(message, scope = "page") {
   } finally {
     assistant.typing = false;
     render();
+    scrollAiChatToBottom(scope);
   }
 }
 
@@ -5502,9 +5597,23 @@ function editPayloadFromForm(form) {
       environment_bindings: environmentBindings,
     };
   }
-  if (form.dataset.type === "resource-rules") {
+  if (form.dataset.type === "environment-rules") {
     return {
-      inspection_item_ids: formData.getAll("inspection_item_ids"),
+      rule_set_ids: formData.getAll("rule_set_ids"),
+    };
+  }
+  if (form.dataset.type === "rule-set") {
+    const splitList = (value) => String(value || "").split(/[，,]/).map((item) => item.trim()).filter(Boolean);
+    return {
+      name: values.name,
+      description: values.description || "",
+      target_kind: values.target_kind || "resource",
+      resource_types: splitList(values.resource_types),
+      service_types: splitList(values.service_types),
+      conditions: {},
+      exclude_keywords: splitList(values.exclude_keywords),
+      item_ids: formData.getAll("item_ids"),
+      enabled: formData.getAll("enabled").includes("true"),
     };
   }
   if (form.dataset.type === "service-discovery") {
@@ -5513,12 +5622,6 @@ function editPayloadFromForm(form) {
       discovery_types: formData.getAll("discovery_types"),
       include_keywords: splitKeywords(values.include_keywords),
       exclude_keywords: splitKeywords(values.exclude_keywords),
-    };
-  }
-  if (form.dataset.type === "service-credential") {
-    return {
-      username: values.username || "",
-      credential_secret: values.credential_secret || "",
     };
   }
   if (form.dataset.type === "application") {
@@ -5576,13 +5679,14 @@ function editPayloadFromForm(form) {
     };
   }
   if (form.dataset.type === "ai-assistant") {
+    const current = state.data.ai_assistant_settings || {};
     return {
       enabled: values.enabled === "true",
       model_id: values.model_id || null,
       name: values.name || "OpsRadar AI",
       welcome_message: values.welcome_message || "",
-      quick_prompts: (values.quick_prompts || "").split(/\n+/).map((item) => item.trim()).filter(Boolean),
-      prompt_templates: state.data.ai_assistant_settings?.prompt_templates || [],
+      quick_prompts: current.quick_prompts || [],
+      prompt_templates: current.prompt_templates || [],
     };
   }
   if (form.dataset.type === "analysis-rule") {
@@ -5654,7 +5758,7 @@ function validateEditForm(form) {
   if (values.inspection_scope === "asset" && formData.getAll("resource_ids").length === 0) {
     return t("toast.selectTaskResources");
   }
-  if (formData.getAll("item_ids").length === 0) {
+  if (formData.getAll("item_ids").length === 0 && values.inspection_scope !== "environment") {
     return t("toast.selectTaskItems");
   }
   return "";
@@ -5668,9 +5772,9 @@ function editEndpoint(type, id) {
   }
   const map = {
     resource: id === "new" ? "/api/resources" : `/api/resources/${id}`,
-    "resource-rules": `/api/resources/${id}/inspection-rules`,
+    "environment-rules": `/api/environments/${id}/rule-sets`,
+    "rule-set": id === "new" ? "/api/rule-sets" : `/api/rule-sets/${id}`,
     "service-discovery": `/api/resources/${id}/discover-services`,
-    "service-credential": `/api/discovered-services/${id}/credential`,
     "inspection-item": "/api/inspection-items",
     "ai-model": id === "new" ? "/api/ai/models" : `/api/ai/models/${id}`,
     "ai-datasource": id === "new" ? "/api/ai/datasources" : `/api/ai/datasources/${id}`,
@@ -6093,11 +6197,15 @@ document.addEventListener("change", (event) => {
     form?.querySelectorAll('input[name="resource_ids"]').forEach((box) => {
       box.checked = Boolean(selected) && envResourceIds.has(box.value);
     });
-    applyBoundRulesToTaskForm(form);
+    applyBoundRulesToTaskForm(form, { replace: true });
     return;
   }
   if (["resource_ids", "service_ids"].includes(target.name) && target.closest("#edit-form")?.dataset.type === "task-create") {
-    applyBoundRulesToTaskForm(target.closest("form"));
+    applyBoundRulesToTaskForm(target.closest("form"), { replace: true });
+    return;
+  }
+  if (["inspection_scope"].includes(target.name) && target.closest("#edit-form")?.dataset.type === "task-create") {
+    applyBoundRulesToTaskForm(target.closest("form"), { replace: true });
     return;
   }
   if (target.dataset.templateFilterKey) {
@@ -6203,6 +6311,11 @@ document.addEventListener("click", async (event) => {
       state.pages[target.dataset.scope] = Number(target.dataset.page);
       render();
     } else if (action === "task-step") {
+      const form = target.closest("form");
+      if (form?.dataset.type === "task-create") {
+        applyBoundRulesToTaskForm(form);
+        state.taskCreateDraft = collectTaskCreateDraft(form);
+      }
       state.taskCreateStep = Math.min(4, Math.max(1, Number(target.dataset.step || 1)));
       render();
     } else if (action === "delete-selected") {
@@ -6289,11 +6402,19 @@ document.addEventListener("click", async (event) => {
       localStorage.setItem("opsradar_tab_environments", "resources");
       resetPage("resources");
       render();
+    } else if (action === "bind-environment-rules") {
+      openModal("environment-rules", target.dataset.id);
     } else if (action === "env-create-task") {
-      state.taskCreateDefaults = { inspection_scope: "environment", environment_id: target.dataset.id };
+      const env = environments().find((item) => item.id === target.dataset.id);
+      const defaultName = env ? `${displayApplicationName(env.application_name)} / ${env.name} ${state.lang === "zh" ? "巡检" : "Inspection"}` : "";
+      state.taskCreateDefaults = { inspection_scope: "environment", environment_id: target.dataset.id, name: defaultName };
       openModal("task-create", "new");
     } else if (action === "add-inspection-item") {
       openModal("inspection-item", "new");
+    } else if (action === "add-rule-set") {
+      openModal("rule-set", "new");
+    } else if (action === "edit-rule-set") {
+      openModal("rule-set", target.dataset.id);
     } else if (action === "add-ai-model") {
       openModal("ai-model", "new");
     } else if (action === "edit-ai-model") {
@@ -6342,9 +6463,10 @@ document.addEventListener("click", async (event) => {
       await api(`/api/tasks/${encodeURIComponent(target.dataset.id)}/start`, { method: "POST" });
       await refreshData(t("toast.taskQueued"));
     } else if (action === "view-task-report") {
+      const task = (state.data.tasks || []).find((item) => item.id === target.dataset.id);
       state.view = "reports";
       state.tabs.reports = "history";
-      state.filters.reports = target.dataset.id || "";
+      state.filters.reports = task?.name || "";
       resetPage("reports");
       localStorage.setItem("opsradar_view", state.view);
       localStorage.setItem("opsradar_tab_reports", state.tabs.reports);
@@ -6439,10 +6561,6 @@ document.addEventListener("click", async (event) => {
       openModal("resource", "new");
     } else if (action === "edit-resource") {
       openModal("resource", target.dataset.id);
-    } else if (action === "bind-resource-rules") {
-      openModal("resource-rules", target.dataset.id);
-    } else if (action === "configure-service-credential") {
-      openModal("service-credential", target.dataset.id);
     } else if (action === "delete-discovered-service") {
       state.modal = { type: "delete-confirm", scope: "discovered-services", ids: [target.dataset.id] };
       render();

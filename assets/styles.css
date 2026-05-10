@@ -3178,6 +3178,24 @@ button {
   font-size: 12px;
 }
 
+.ai-inline-prompt {
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--brand) 24%, var(--line));
+  border-radius: 12px;
+  padding: 9px 11px;
+  color: var(--brand-strong);
+  background: color-mix(in srgb, var(--brand) 8%, var(--surface));
+  font-weight: 850;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-inline-prompt:hover {
+  border-color: color-mix(in srgb, var(--brand) 44%, var(--line));
+  background: color-mix(in srgb, var(--brand) 13%, var(--surface));
+}
+
 .ai-chat-bubble span {
   display: block;
   margin-top: 4px;
@@ -5019,6 +5037,15 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.env-stat.latest strong {
+  font-size: 14px;
+  line-height: 1.3;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: keep-all;
 }
 
 .env-health-row {

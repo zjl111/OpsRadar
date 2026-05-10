@@ -28,6 +28,7 @@ from backend.app.models import (
     AuditLog,
     CronPlan,
     DiscoveredService,
+    EnvironmentRuleSet,
     EnvironmentDatasourceBinding,
     EnvironmentResource,
     InspectionItem,
@@ -39,6 +40,7 @@ from backend.app.models import (
     Resource,
     ResourceType,
     Role,
+    RuleSet,
     SiteSetting,
     Task,
     TaskLog,
@@ -54,6 +56,7 @@ from backend.app.schemas import (
     ApplicationPayload,
     EnvironmentDatasourceBindingPayload,
     EnvironmentPayload,
+    EnvironmentRuleSetBindingPayload,
     InspectionItemCreate,
     IssueUpdate,
     LoginRequest,
@@ -63,11 +66,10 @@ from backend.app.schemas import (
     TaskCreateRequest,
     ResourceBatchCreate,
     ResourceCreate,
-    ResourceRuleBindingPayload,
     ResourceTypePayload,
     ResourceUpdate,
     RoleUpdate,
-    ServiceCredentialPayload,
+    RuleSetPayload,
     SiteSettingsUpdate,
     ServiceDiscoveryRequest,
     UserCreate,
@@ -75,7 +77,7 @@ from backend.app.schemas import (
 )
 from backend.app.services.analysis import build_issue_insight, environment_overview
 from backend.app.services.inspection_engine import create_manual_task
-from backend.app.services.crypto import decrypt_secret, encrypt_secret, has_encrypted_credential, set_encrypted_credential
+from backend.app.services.crypto import decrypt_secret, has_encrypted_credential, set_encrypted_credential
 from backend.app.services.diagnose_tools import (
     diagnose_evidence,
     diagnose_summary_for_issue,
@@ -165,10 +167,16 @@ def resource_payload(resource: Resource, *, include_bindings: bool = True) -> di
     credential_configured = has_encrypted_credential(extra)
     extra.pop("credential_secret", None)
     extra.pop("credential_encrypted", None)
+    extra.pop("bound_inspection_item_ids", None)
+    extra.pop("rules_manually_configured", None)
+    extra.pop("service_credential_configured", None)
+    extra.pop("service_credential_encrypted", None)
+    extra.pop("service_credential_target", None)
+    extra.pop("requires_service_credentials", None)
     data["extra_params"] = extra
     data["credential_configured"] = credential_configured
-    data["bound_rule_ids"] = [str(item) for item in (extra.get("bound_inspection_item_ids") or []) if item]
-    data["bound_rule_count"] = len(data["bound_rule_ids"])
+    data["bound_rule_ids"] = []
+    data["bound_rule_count"] = 0
     if include_bindings:
         bindings = list(resource.environment_bindings or [])
         data["environment_bindings"] = [environment_resource_payload(binding, include_resource=False) for binding in bindings]
@@ -180,35 +188,13 @@ def resource_payload(resource: Resource, *, include_bindings: bool = True) -> di
     return data
 
 
-def default_inspection_item_ids(db: Session, resource_type: str) -> list[str]:
-    type_map = {
-        "host": ["itm_os_cpu", "itm_os_memory", "itm_os_disk_inode", "itm_os_load", "itm_os_time_sync"],
-        "linux": ["itm_os_cpu", "itm_os_memory", "itm_os_disk_inode", "itm_os_load", "itm_os_time_sync"],
-        "server": ["itm_os_cpu", "itm_os_memory", "itm_os_disk_inode", "itm_os_load", "itm_os_time_sync"],
-        "container": ["itm_container_state", "itm_container_stats", "itm_container_inspect_restart"],
-        "compose": ["itm_compose_ps", "itm_compose_logs_error"],
-        "systemd": ["itm_systemd_active", "itm_systemd_logs_error"],
-        "pgsql": ["itm_pg_conn_ratio", "itm_pg_slow_query", "itm_pg_replication_lag"],
-        "mysql": ["itm_mysql_conn_ratio", "itm_mysql_slow_query", "itm_mysql_deadlock"],
-        "redis": ["itm_redis_memory", "itm_redis_connections", "itm_redis_slowlog"],
-        "middleware": ["itm_mid_http_status", "itm_mid_ssl_expiry"],
-    }
-    ids = type_map.get(resource_type, [])
+def validate_rule_set_items(db: Session, item_ids: list[str]) -> None:
+    ids = sorted({item_id for item_id in item_ids if item_id})
     if not ids:
-        return []
-    existing = {
-        row.id
-        for row in db.query(InspectionItem.id)
-        .filter(InspectionItem.id.in_(ids), InspectionItem.enabled.is_(True))
-        .all()
-    }
-    return [item_id for item_id in ids if item_id in existing]
-
-
-def apply_default_rule_binding(db: Session, extra_params: dict, resource_type: str) -> dict:
-    extra = dict(extra_params or {})
-    extra.setdefault("bound_inspection_item_ids", default_inspection_item_ids(db, resource_type))
-    return extra
+        return
+    existing = db.query(InspectionItem).filter(InspectionItem.id.in_(ids), InspectionItem.enabled.is_(True)).count()
+    if existing != len(ids):
+        raise HTTPException(status_code=422, detail="One or more inspection items were not found or disabled")
 
 
 def ensure_site_settings(db: Session) -> SiteSetting:
@@ -222,16 +208,26 @@ def ensure_site_settings(db: Session) -> SiteSetting:
 
 
 def ensure_ai_assistant_settings(db: Session) -> AiAssistantSetting:
+    default_welcome = (
+        "👋 你好，我是 OpsRadar AI 智能巡检助手\n\n"
+        "我可以帮你分析巡检异常、定位问题原因、生成修复建议，也可以通过对话引导你创建巡检任务、添加资产、执行巡检并生成报告。\n\n"
+        "你可以试着问我：\n"
+        "[ 帮我给生产环境创建一次 JumpServer 集群巡检 ]\n"
+        "[ 分析当前异常的可能原因 ]\n"
+        "[ 根据巡检结果生成修复建议 ]"
+    )
+    default_prompts = [
+        "帮我给生产环境创建一次 JumpServer 集群巡检",
+        "分析当前异常的可能原因",
+        "根据巡检结果生成修复建议",
+    ]
     setting = db.get(AiAssistantSetting, "default")
     if not setting:
         setting = AiAssistantSetting(
             id="default",
             enabled=False,
-            quick_prompts=[
-                "总结当前异常的可能原因",
-                "查询最近 1 小时的错误日志",
-                "生成人工排障步骤",
-            ],
+            welcome_message=default_welcome,
+            quick_prompts=default_prompts,
             prompt_templates=[
                 {"name": "异常根因分析", "scope": "issue"},
                 {"name": "巡检报告总结", "scope": "report"},
@@ -239,6 +235,16 @@ def ensure_ai_assistant_settings(db: Session) -> AiAssistantSetting:
             ],
         )
         db.add(setting)
+        db.commit()
+        db.refresh(setting)
+    elif setting.welcome_message in {"你好，我可以基于当前页面上下文辅助排障。", ""}:
+        setting.welcome_message = default_welcome
+        if setting.quick_prompts in (
+            None,
+            [],
+            ["总结当前异常的可能原因", "查询最近 1 小时的错误日志", "生成人工排障步骤"],
+        ):
+            setting.quick_prompts = default_prompts
         db.commit()
         db.refresh(setting)
     return setting
@@ -391,10 +397,19 @@ def environment_resource_payload(binding: EnvironmentResource, *, include_resour
 def environment_payload(environment: AppEnvironment, *, include_children: bool = False, db: Session | None = None) -> dict:
     data = model_to_dict(environment)
     data["application_name"] = environment.application.name if environment.application else ""
+    data["rule_set_ids"] = [binding.rule_set_id for binding in environment.rule_sets if binding.enabled and binding.rule_set]
+    data["rule_sets"] = [rule_set_payload(binding.rule_set) for binding in environment.rule_sets if binding.enabled and binding.rule_set]
     if include_children:
         data["resources"] = [environment_resource_payload(item) for item in environment.resources]
     if db is not None:
         data["overview"] = environment_overview(db, environment)
+    return data
+
+
+def rule_set_payload(rule_set: RuleSet) -> dict:
+    data = model_to_dict(rule_set)
+    data["item_count"] = len(rule_set.item_ids or [])
+    data["items"] = [item_id for item_id in (rule_set.item_ids or [])]
     return data
 
 
@@ -539,12 +554,68 @@ def validate_task_create_payload(db: Session, payload: TaskCreateRequest) -> lis
     resources = db.query(Resource).filter(Resource.id.in_(resource_ids)).count()
     if resources != len(set(resource_ids)):
         raise HTTPException(status_code=422, detail="One or more resources were not found")
-    if not payload.item_ids:
-        raise HTTPException(status_code=422, detail="Select at least one inspection item")
-    items = db.query(InspectionItem).filter(InspectionItem.id.in_(payload.item_ids), InspectionItem.enabled.is_(True)).count()
-    if items != len(set(payload.item_ids)):
-        raise HTTPException(status_code=422, detail="One or more inspection items were not found or disabled")
     return resource_ids
+
+
+def rule_set_matches_resource(rule_set: RuleSet, resource: Resource) -> bool:
+    extra = dict(resource.extra_params or {})
+    resource_types = {str(item) for item in (rule_set.resource_types or []) if item}
+    service_types = {str(item) for item in (rule_set.service_types or []) if item}
+    if resource_types and resource.type not in resource_types:
+        return False
+    service_kind = str(extra.get("service_kind") or "")
+    if service_types and service_kind not in service_types:
+        return False
+    haystack = " ".join(
+        str(value or "")
+        for value in [
+            resource.name,
+            resource.type,
+            resource.ip,
+            resource.port,
+            extra.get("service_kind"),
+            extra.get("container_name"),
+            extra.get("compose_project"),
+            extra.get("compose_service"),
+            extra.get("systemd_unit"),
+            extra.get("image"),
+        ]
+    ).lower()
+    for keyword in rule_set.exclude_keywords or []:
+        if str(keyword).strip().lower() and str(keyword).strip().lower() in haystack:
+            return False
+    return True
+
+
+def resolve_task_item_ids(db: Session, payload: TaskCreateRequest, resource_ids: list[str]) -> list[str]:
+    explicit_ids = sorted({item_id for item_id in payload.item_ids if item_id})
+    if explicit_ids:
+        validate_rule_set_items(db, explicit_ids)
+        return explicit_ids
+    if not payload.environment_id:
+        raise HTTPException(status_code=422, detail="Select at least one inspection item")
+    rule_sets = (
+        db.query(RuleSet)
+        .join(EnvironmentRuleSet, EnvironmentRuleSet.rule_set_id == RuleSet.id)
+        .filter(
+            EnvironmentRuleSet.environment_id == payload.environment_id,
+            EnvironmentRuleSet.enabled.is_(True),
+            RuleSet.enabled.is_(True),
+        )
+        .all()
+    )
+    if not rule_sets:
+        raise HTTPException(status_code=422, detail="Bind at least one rule set to this application environment")
+    resources = db.query(Resource).filter(Resource.id.in_(resource_ids)).all()
+    ids: set[str] = set()
+    for resource in resources:
+        for rule_set in rule_sets:
+            if rule_set_matches_resource(rule_set, resource):
+                ids.update(str(item_id) for item_id in (rule_set.item_ids or []) if item_id)
+    if not ids:
+        raise HTTPException(status_code=422, detail="No inspection items matched selected resources and environment rule sets")
+    validate_rule_set_items(db, sorted(ids))
+    return sorted(ids)
 
 
 def resource_execution_snapshot(resource: Resource) -> dict:
@@ -711,6 +782,7 @@ def bootstrap(db: Annotated[Session, Depends(get_db)], user: Annotated[User, Dep
         "resources": [resource_payload(item) for item in db.query(Resource).order_by(Resource.created_at.desc()).all()] if can(db, user, "resources:read") else [],
         "discovered_services": [discovered_service_payload(item) for item in db.query(DiscoveredService).order_by(DiscoveredService.updated_at.desc()).all()] if can(db, user, "resources:read") else [],
         "resource_types": [model_to_dict(item) for item in db.query(ResourceType).order_by(ResourceType.key).all()],
+        "rule_sets": [rule_set_payload(item) for item in db.query(RuleSet).order_by(RuleSet.name).all()] if can(db, user, "templates:read") else [],
         "inspection_items": [model_to_dict(item) for item in db.query(InspectionItem).order_by(InspectionItem.category, InspectionItem.name).all()] if can(db, user, "templates:read") else [],
         "tasks": [task_payload(item) for item in db.query(Task).order_by(Task.created_at.desc()).limit(30).all()] if can(db, user, "tasks:read") else [],
         "issues": [issue_payload(item, db) for item in db.query(Issue).order_by(Issue.created_at.desc()).limit(50).all()] if can(db, user, "issues:read") else [],
@@ -863,6 +935,63 @@ def delete_environment(environment_id: str, db: Annotated[Session, Depends(get_d
     db.delete(env)
     db.commit()
     return {"ok": True}
+
+
+@router.patch("/environments/{environment_id}/rule-sets")
+def update_environment_rule_sets(
+    environment_id: str,
+    payload: EnvironmentRuleSetBindingPayload,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_user)],
+) -> dict:
+    require_permission(db, user, "environments:update")
+    environment = db.get(AppEnvironment, environment_id)
+    if not environment:
+        raise HTTPException(status_code=404, detail="Application environment not found")
+    ids = sorted({item for item in payload.rule_set_ids if item})
+    if ids:
+        existing = db.query(RuleSet).filter(RuleSet.id.in_(ids), RuleSet.enabled.is_(True)).count()
+        if existing != len(ids):
+            raise HTTPException(status_code=422, detail="One or more rule sets were not found or disabled")
+    db.query(EnvironmentRuleSet).filter(EnvironmentRuleSet.environment_id == environment_id).delete(synchronize_session=False)
+    for rule_set_id in ids:
+        db.add(EnvironmentRuleSet(environment_id=environment_id, rule_set_id=rule_set_id, enabled=True))
+    db.add(AuditLog(actor=user.display_name, action="bind_environment_rule_sets", target=environment.name, detail=f"{len(ids)} rule sets"))
+    db.commit()
+    db.refresh(environment)
+    return environment_payload(environment, include_children=True, db=db)
+
+
+@router.post("/rule-sets")
+def create_rule_set(payload: RuleSetPayload, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(require_user)]) -> dict:
+    require_permission(db, user, "templates:create")
+    if db.query(RuleSet).filter(RuleSet.name == payload.name).first():
+        raise HTTPException(status_code=409, detail="Rule set already exists")
+    validate_rule_set_items(db, payload.item_ids)
+    rule_set = RuleSet(**payload.model_dump(), is_builtin=False)
+    db.add(rule_set)
+    db.add(AuditLog(actor=user.display_name, action="create_rule_set", target=rule_set.name, detail=rule_set.target_kind))
+    db.commit()
+    db.refresh(rule_set)
+    return rule_set_payload(rule_set)
+
+
+@router.patch("/rule-sets/{rule_set_id}")
+def update_rule_set(rule_set_id: str, payload: RuleSetPayload, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(require_user)]) -> dict:
+    require_permission(db, user, "templates:update")
+    rule_set = db.get(RuleSet, rule_set_id)
+    if not rule_set:
+        raise HTTPException(status_code=404, detail="Rule set not found")
+    duplicate = db.query(RuleSet).filter(RuleSet.name == payload.name, RuleSet.id != rule_set_id).first()
+    if duplicate:
+        raise HTTPException(status_code=409, detail="Rule set already exists")
+    validate_rule_set_items(db, payload.item_ids)
+    for field, value in payload.model_dump().items():
+        setattr(rule_set, field, value)
+    db.add(AuditLog(actor=user.display_name, action="update_rule_set", target=rule_set.name, detail=rule_set.target_kind))
+    db.commit()
+    db.refresh(rule_set)
+    return rule_set_payload(rule_set)
 
 
 @router.get("/environments/{environment_id}/overview")
@@ -1399,6 +1528,99 @@ def _observability_context_reply(message: str, context: dict) -> str | None:
     return f"当前未接入{'、'.join(missing)}，所以不能查询对应的历史监控或集中日志。现在只能基于{fallback}进行分析；接入 Prometheus/VictoriaMetrics/Grafana/VictoriaLogs 等数据源后，才能结合历史数据做趋势和时间窗口分析。"
 
 
+def _is_opsradar_domain_message(message: str) -> bool:
+    text = (message or "").lower()
+    if not text.strip():
+        return True
+    denied_keywords = [
+        "天气",
+        "股票",
+        "彩票",
+        "菜谱",
+        "旅游",
+        "电影",
+        "小说",
+        "写诗",
+        "情书",
+        "翻译",
+        "历史人物",
+        "新闻",
+        "作业",
+        "homework",
+        "weather",
+        "stock",
+        "recipe",
+        "movie",
+        "poem",
+        "translate",
+    ]
+    allowed_keywords = [
+        "opsradar",
+        "巡检",
+        "资源",
+        "资产",
+        "应用",
+        "环境",
+        "服务",
+        "发现",
+        "任务",
+        "报告",
+        "问题",
+        "异常",
+        "告警",
+        "日志",
+        "监控",
+        "诊断",
+        "根因",
+        "修复",
+        "排障",
+        "健康",
+        "审计",
+        "权限",
+        "角色",
+        "模型",
+        "知识库",
+        "docker",
+        "compose",
+        "systemd",
+        "redis",
+        "mysql",
+        "postgres",
+        "pgsql",
+        "jumpserver",
+        "itdevops",
+        "prometheus",
+        "grafana",
+        "victoria",
+        "diagnose",
+        "root cause",
+        "inspection",
+        "你好",
+        "hello",
+        "hi",
+        "你能做",
+        "你都可以",
+        "你可以",
+        "能做什么",
+        "能干什么",
+        "功能",
+        "怎么用",
+        "帮我创建",
+        "帮我分析",
+        "帮我排查",
+    ]
+    if any(keyword in text for keyword in denied_keywords) and not any(keyword in text for keyword in allowed_keywords):
+        return False
+    return any(keyword in text for keyword in allowed_keywords)
+
+
+def _out_of_scope_reply() -> str:
+    return (
+        "我只能回答 OpsRadar 系统内的运维巡检、资源管理、服务发现、问题诊断、报告分析、"
+        "日志/监控接入、修复建议和平台配置相关问题。请换一个和 OpsRadar 巡检场景相关的问题。"
+    )
+
+
 @router.post("/ai/chat")
 def ai_chat(payload: AiChatPayload, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(require_user)]) -> dict:
     require_permission(db, user, "ai_assistant:read")
@@ -1424,6 +1646,11 @@ def ai_chat(payload: AiChatPayload, db: Annotated[Session, Depends(get_db)], use
     )
     db.add(AiChatMessage(session_id=session.id, role="user", content=payload.message, meta={"context": payload.context}))
     data_context = _chat_data_context(db)
+    if not _is_opsradar_domain_message(payload.message):
+        out_of_scope_reply = _out_of_scope_reply()
+        db.add(AiChatMessage(session_id=session.id, role="assistant", content=out_of_scope_reply, meta={"status": "out_of_scope", "data_context": data_context, "tool_runs": [], "evidence": []}))
+        db.commit()
+        return {"session_id": session.id, "message": out_of_scope_reply, "status": "out_of_scope", "tool_runs": [], "evidence": [], "data_context": data_context}
     empty_reply = _empty_context_reply(payload.message, data_context)
     if empty_reply:
         db.add(AiChatMessage(session_id=session.id, role="assistant", content=empty_reply, meta={"status": "empty_context", "data_context": data_context, "tool_runs": [], "evidence": []}))
@@ -1449,7 +1676,8 @@ def ai_chat(payload: AiChatPayload, db: Annotated[Session, Depends(get_db)], use
                 {
                     "role": "system",
                     "content": (
-                        "你是 OpsRadar AI 助手。回答必须围绕运维巡检、问题排障、根因分析、影响分析、修复建议和验证步骤。"
+                        "你是 OpsRadar AI 助手，只能回答 OpsRadar 系统内的运维巡检、资源管理、服务发现、问题排障、根因分析、影响分析、修复建议、任务编排、报告和平台配置问题。"
+                        "遇到与 OpsRadar 无关的问题必须拒答，不要进行通用聊天、百科问答或无关代码生成。"
                         "如果需要执行工具，请明确列出建议调用的 Diagnose Tools 和需要的参数；不要编造实时执行结果。"
                         "如果当前没有资产、巡检结果、异常问题或工具证据，必须明确说明暂无可分析数据，不能给出泛化根因结论。"
                         "查询历史监控或集中日志前必须检查数据源状态；未接入时只能使用巡检结果或通过远程连接采集现场状态。"
@@ -1954,6 +2182,7 @@ def delete_cron_plan(
 
 def apply_cron_plan_payload(db: Session, plan: CronPlan, payload: TaskCreateRequest, creator_id: str | None) -> CronPlan:
     resource_ids = validate_task_create_payload(db, payload)
+    item_ids = resolve_task_item_ids(db, payload, resource_ids)
     cron_expr = cron_expr_for(payload.schedule_rule, payload.schedule_time)
     plan.name = payload.name
     plan.environment_id = payload.environment_id
@@ -1961,7 +2190,7 @@ def apply_cron_plan_payload(db: Session, plan: CronPlan, payload: TaskCreateRequ
     plan.description = payload.description
     plan.cron_expr = cron_expr
     plan.resource_ids = resource_ids
-    plan.item_ids = payload.item_ids
+    plan.item_ids = item_ids
     plan.enabled = True
     plan.next_run_at = next_run_for(cron_expr)
     plan.notification_config = enrich_task_config_with_environment(db, task_create_config(payload), payload.environment_id)
@@ -1998,6 +2227,7 @@ def create_configured_task(
 ) -> dict:
     require_permission(db, user, "tasks:create")
     resource_ids = validate_task_create_payload(db, payload)
+    item_ids = resolve_task_item_ids(db, payload, resource_ids)
     config = enrich_task_config_with_environment(db, task_create_config(payload), payload.environment_id)
     creator_id = payload.owner_id or user.id
     if payload.execution_mode == "periodic":
@@ -2012,7 +2242,7 @@ def create_configured_task(
         db,
         name=payload.name,
         resource_ids=resource_ids,
-        item_ids=payload.item_ids,
+        item_ids=item_ids,
         user_id=creator_id,
         environment_id=payload.environment_id,
         config=config,
@@ -2054,6 +2284,7 @@ def update_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     resource_ids = validate_task_create_payload(db, payload)
+    item_ids = resolve_task_item_ids(db, payload, resource_ids)
     task.name = payload.name
     task.environment_id = payload.environment_id
     environment = db.get(AppEnvironment, payload.environment_id) if payload.environment_id else None
@@ -2064,7 +2295,7 @@ def update_task(
         db.query(TaskResult).filter(TaskResult.task_id == task.id).delete(synchronize_session=False)
         db.flush()
         resources = db.query(Resource).filter(Resource.id.in_(resource_ids)).all()
-        items = db.query(InspectionItem).filter(InspectionItem.id.in_(payload.item_ids)).all()
+        items = db.query(InspectionItem).filter(InspectionItem.id.in_(item_ids)).all()
         total = 0
         from backend.app.services.inspection_engine import _compatible, _item_snapshot
         for resource in resources:
@@ -2148,7 +2379,6 @@ def create_resource(payload: ResourceCreate, db: Annotated[Session, Depends(get_
         raise HTTPException(status_code=422, detail="Resource type is not enabled")
     extra_params = set_encrypted_credential({}, credential_secret) if credential_secret else {}
     extra_params = merge_resource_extra_params(extra_params, extra_updates)
-    extra_params = apply_default_rule_binding(db, extra_params, values["type"])
     resource = Resource(**values, status="untested", disk_usage=0, extra_params=extra_params)
     db.add(resource)
     db.flush()
@@ -2176,7 +2406,6 @@ def create_resources_batch(
             raise HTTPException(status_code=422, detail=f"Resource type is not enabled: {values['type']}")
         extra_params = set_encrypted_credential({}, credential_secret) if credential_secret else {}
         extra_params = merge_resource_extra_params(extra_params, extra_updates)
-        extra_params = apply_default_rule_binding(db, extra_params, values["type"])
         resource = Resource(**values, status="untested", disk_usage=0, extra_params=extra_params)
         db.add(resource)
         db.flush()
@@ -2205,37 +2434,6 @@ async def test_resource(resource_id: str, db: Annotated[Session, Depends(get_db)
     )
     resource.status = "online" if result.status == "success" else "offline"
     db.add(AuditLog(actor=user.display_name, action="test_resource", target=resource.name, detail=f"Result: {resource.status}"))
-    db.commit()
-    db.refresh(resource)
-    return resource_payload(resource)
-
-
-@router.patch("/resources/{resource_id}/inspection-rules")
-def update_resource_inspection_rules(
-    resource_id: str,
-    payload: ResourceRuleBindingPayload,
-    db: Annotated[Session, Depends(get_db)],
-    user: Annotated[User, Depends(require_user)],
-) -> dict:
-    require_permission(db, user, "resources:update")
-    resource = db.get(Resource, resource_id)
-    if not resource:
-        raise HTTPException(status_code=404, detail="Resource not found")
-    ids = sorted({item_id for item_id in payload.inspection_item_ids if item_id})
-    if ids:
-        existing_count = db.query(InspectionItem).filter(InspectionItem.id.in_(ids), InspectionItem.enabled.is_(True)).count()
-        if existing_count != len(ids):
-            raise HTTPException(status_code=422, detail="One or more inspection items were not found or disabled")
-    extra = dict(resource.extra_params or {})
-    extra["bound_inspection_item_ids"] = ids
-    extra["rules_manually_configured"] = True
-    resource.extra_params = extra
-    if extra.get("discovered_service_id"):
-        service = db.get(DiscoveredService, extra["discovered_service_id"])
-        if service:
-            service.bound_rule_count = len(ids)
-            service.is_bound = bool(ids)
-    db.add(AuditLog(actor=user.display_name, action="bind_inspection_rules", target=resource.name, detail=f"{len(ids)} rules"))
     db.commit()
     db.refresh(resource)
     return resource_payload(resource)
@@ -2285,32 +2483,6 @@ def delete_discovered_service(service_id: str, db: Annotated[Session, Depends(ge
     db.add(AuditLog(actor=user.display_name, action="delete_discovered_service", target=service_name, detail=service_id))
     db.commit()
     return {"deleted": service_id}
-
-
-@router.patch("/discovered-services/{service_id}/credential")
-def update_discovered_service_credential(
-    service_id: str,
-    payload: ServiceCredentialPayload,
-    db: Annotated[Session, Depends(get_db)],
-    user: Annotated[User, Depends(require_user)],
-) -> dict:
-    require_permission(db, user, "resources:update")
-    service = db.get(DiscoveredService, service_id)
-    if not service or not service.service_resource_id:
-        raise HTTPException(status_code=404, detail="Discovered service not found")
-    resource = db.get(Resource, service.service_resource_id)
-    if not resource:
-        raise HTTPException(status_code=404, detail="Service resource not found")
-    extra = dict(resource.extra_params or {})
-    extra["service_credential_username"] = payload.username or ""
-    extra["service_credential_encrypted"] = encrypt_secret(payload.credential_secret)
-    extra["service_credential_configured"] = True
-    resource.extra_params = extra
-    service.bound_rule_count = len(extra.get("bound_inspection_item_ids") or [])
-    db.add(AuditLog(actor=user.display_name, action="update_service_credential", target=service.name, detail=service.id))
-    db.commit()
-    db.refresh(service)
-    return discovered_service_payload(service)
 
 
 @router.post("/inspection-items")

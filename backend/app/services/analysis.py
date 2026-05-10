@@ -103,6 +103,7 @@ def environment_overview(db: Session, environment: AppEnvironment) -> dict:
         .all()
     )
     latest_task = next((task for task in tasks if task.status in {"finished", "failed", "cancelled"}), tasks[0] if tasks else None)
+    latest_started_task = max((task for task in tasks if task.started_at), key=lambda task: task.started_at, default=None)
     results = db.query(TaskResult).filter(TaskResult.task_id == latest_task.id).all() if latest_task else []
     layer_counts: dict[str, dict[str, int]] = defaultdict(lambda: {"total": 0, "success": 0, "fail": 0, "exception": 0})
     for result in results:
@@ -146,6 +147,7 @@ def environment_overview(db: Session, environment: AppEnvironment) -> dict:
         "status": layer_status(health_score),
         "layers": layers,
         "latest_task": model_to_dict(latest_task) if latest_task else None,
+        "latest_started_task": model_to_dict(latest_started_task) if latest_started_task else None,
         "recent_tasks": [model_to_dict(task) for task in tasks],
         "open_issues": insights,
     }

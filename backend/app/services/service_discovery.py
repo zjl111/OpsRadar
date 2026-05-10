@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from backend.app.models import DiscoveredService, EnvironmentResource, InspectionItem, Resource
+from backend.app.models import DiscoveredService, EnvironmentResource, Resource
 from backend.app.services.executors import ExecutionContext, InspectionExecutor
 
 
@@ -35,9 +35,6 @@ SYSTEMD_COMMAND = """systemctl list-units --type=service --state=running --no-le
 
 
 def discovered_service_payload(service: DiscoveredService) -> dict:
-    extra = dict(service.service_resource.extra_params or {}) if service.service_resource else {}
-    bound_rule_ids = [str(item) for item in (extra.get("bound_inspection_item_ids") or []) if item]
-    credential_target = extra.get("service_credential_target") or service_credential_target(service)
     return {
         "id": service.id,
         "resource_id": service.resource_id,
@@ -60,11 +57,8 @@ def discovered_service_payload(service: DiscoveredService) -> dict:
         "command": service.command,
         "labels": service.labels or [],
         "meta": service.meta or {},
-        "bound_rule_ids": bound_rule_ids,
-        "bound_rule_count": len(bound_rule_ids) or service.bound_rule_count,
-        "requires_credentials": bool(extra.get("requires_service_credentials") or credential_target),
-        "credential_target": credential_target,
-        "service_credential_configured": bool(extra.get("service_credential_configured")),
+        "bound_rule_ids": [],
+        "bound_rule_count": 0,
         "is_bound": service.is_bound,
         "last_discovered_at": service.last_discovered_at.isoformat() if service.last_discovered_at else None,
     }
@@ -199,48 +193,6 @@ def normalize_keywords(values: list[str]) -> list[str]:
     return [str(value).strip().lower() for value in values if str(value).strip()]
 
 
-def service_credential_target(service: DiscoveredService) -> str:
-    text = f"{service.name} {service.image} {service.port} {service.identity}".lower()
-    if "sqlserver" in text or "mssql" in text or service.port == "1433":
-        return "sqlserver"
-    if "mysql" in text or service.port == "3306":
-        return "mysql"
-    if "postgres" in text or "pgsql" in text or service.port == "5432":
-        return "postgresql"
-    if "redis" in text or service.port == "6379":
-        return "redis"
-    return ""
-
-
-def recommended_rule_ids(db: Session, service: DiscoveredService, resource_type: str) -> list[str]:
-    text = f"{service.name} {service.image} {service.port} {service.identity}".lower()
-    ids: list[str]
-    if resource_type == "compose":
-        ids = ["itm_compose_ps", "itm_compose_logs_error"]
-    elif resource_type == "systemd":
-        ids = ["itm_systemd_active", "itm_systemd_logs_error"]
-    else:
-        ids = ["itm_container_state", "itm_container_stats", "itm_container_inspect_restart"]
-    if "redis" in text or service.port == "6379":
-        ids.extend(["itm_redis_memory", "itm_redis_connections", "itm_redis_slowlog"])
-    if "mysql" in text or service.port == "3306":
-        ids.extend(["itm_mysql_conn_ratio", "itm_mysql_slow_query", "itm_mysql_deadlock"])
-    if "postgres" in text or "pgsql" in text or service.port == "5432":
-        ids.extend(["itm_pg_conn_ratio", "itm_pg_slow_query", "itm_pg_replication_lag"])
-    if "nginx" in text or service.port in {"80", "443"}:
-        ids.append("itm_mid_http_status")
-        if service.port == "443":
-            ids.append("itm_mid_ssl_expiry")
-    ids = list(dict.fromkeys(ids))
-    existing = {
-        item.id
-        for item in db.query(InspectionItem.id)
-        .filter(InspectionItem.id.in_(ids), InspectionItem.enabled.is_(True))
-        .all()
-    }
-    return [item_id for item_id in ids if item_id in existing]
-
-
 def upsert_discovered_services(db: Session, host: Resource, candidates: list[ServiceCandidate]) -> list[DiscoveredService]:
     now = datetime.now(timezone.utc)
     seen: set[tuple[str, str]] = set()
@@ -291,8 +243,7 @@ def upsert_discovered_services(db: Session, host: Resource, candidates: list[Ser
         db.flush()
         service_resource = ensure_service_resource(db, host, service)
         service.service_resource_id = service_resource.id
-        bound_rule_ids = list((service_resource.extra_params or {}).get("bound_inspection_item_ids") or [])
-        service.bound_rule_count = len(bound_rule_ids) or service.bound_rule_count
+        service.bound_rule_count = 0
         discovered.append(service)
     mark_missing_services(db, host, seen, now)
     db.flush()
@@ -302,12 +253,7 @@ def upsert_discovered_services(db: Session, host: Resource, candidates: list[Ser
 def ensure_service_resource(db: Session, host: Resource, service: DiscoveredService) -> Resource:
     resource = db.get(Resource, service.service_resource_id) if service.service_resource_id else None
     resource_type = "compose" if service.discovery_type == "docker_compose" else "systemd" if service.discovery_type == "systemd" else "container"
-    existing_extra = dict(resource.extra_params or {}) if resource else {}
     extra = dict(host.extra_params or {})
-    for key in ("rules_manually_configured", "bound_inspection_item_ids", "service_credential_configured", "service_credential_encrypted"):
-        if key in existing_extra:
-            extra[key] = existing_extra[key]
-    credential_target = service_credential_target(service)
     extra.update(
         {
             "parent_resource_id": host.id,
@@ -318,12 +264,8 @@ def ensure_service_resource(db: Session, host: Resource, service: DiscoveredServ
             "compose_service": service.compose_service,
             "systemd_unit": service.systemd_unit,
             "image": service.image,
-            "requires_service_credentials": bool(credential_target),
-            "service_credential_target": credential_target,
         }
     )
-    if not extra.get("rules_manually_configured"):
-        extra["bound_inspection_item_ids"] = recommended_rule_ids(db, service, resource_type)
     if not resource:
         resource = Resource(
             name=service.name,

@@ -13,7 +13,7 @@ class LoginRequest(BaseModel):
 class ManualTaskRequest(BaseModel):
     name: str | None = Field(default=None, max_length=255)
     resource_ids: list[str] = Field(min_length=1)
-    item_ids: list[str] = Field(min_length=1)
+    item_ids: list[str] = Field(default_factory=list)
 
 
 class TaskCreateRequest(BaseModel):
@@ -25,7 +25,7 @@ class TaskCreateRequest(BaseModel):
     environment_id: str | None = None
     resource_ids: list[str] = Field(default_factory=list)
     service_ids: list[str] = Field(default_factory=list)
-    item_ids: list[str] = Field(min_length=1)
+    item_ids: list[str] = Field(default_factory=list)
     owner_id: str | None = None
     notify_channels: list[Literal["site", "email", "sms"]] = Field(default_factory=list)
     reminder_rules: list[str] = Field(default_factory=list)
@@ -96,8 +96,20 @@ class ResourceUpdate(BaseModel):
     environment_bindings: list[ResourceEnvironmentBindingPayload] | None = None
 
 
-class ResourceRuleBindingPayload(BaseModel):
-    inspection_item_ids: list[str] = Field(default_factory=list)
+class RuleSetPayload(BaseModel):
+    name: str = Field(min_length=2, max_length=128)
+    description: str = ""
+    target_kind: Literal["resource", "service", "all"] = "resource"
+    resource_types: list[str] = Field(default_factory=list)
+    service_types: list[str] = Field(default_factory=list)
+    conditions: dict = Field(default_factory=dict)
+    exclude_keywords: list[str] = Field(default_factory=list)
+    item_ids: list[str] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class EnvironmentRuleSetBindingPayload(BaseModel):
+    rule_set_ids: list[str] = Field(default_factory=list)
 
 
 class ServiceDiscoveryRequest(BaseModel):
@@ -106,11 +118,6 @@ class ServiceDiscoveryRequest(BaseModel):
     )
     include_keywords: list[str] = Field(default_factory=list)
     exclude_keywords: list[str] = Field(default_factory=list)
-
-
-class ServiceCredentialPayload(BaseModel):
-    username: str = Field(default="", max_length=128)
-    credential_secret: str = Field(min_length=1, max_length=20000)
 
 
 class UserUpdate(BaseModel):

@@ -84,6 +84,7 @@ class AppEnvironment(Base):
 
     application = relationship("Application", back_populates="environments")
     resources = relationship("EnvironmentResource", back_populates="environment", cascade="all, delete-orphan")
+    rule_sets = relationship("EnvironmentRuleSet", back_populates="environment", cascade="all, delete-orphan")
 
 
 class EnvironmentResource(Base):
@@ -187,6 +188,38 @@ class InspectionItem(Base):
     enabled = Column(Boolean, default=True, nullable=False)
     description = Column(Text, default="")
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class RuleSet(Base):
+    __tablename__ = "rule_sets"
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("rset"))
+    name = Column(String(128), unique=True, nullable=False)
+    description = Column(Text, default="")
+    target_kind = Column(String(32), default="resource", nullable=False)
+    resource_types = Column(JSON, default=list, nullable=False)
+    service_types = Column(JSON, default=list, nullable=False)
+    conditions = Column(JSON, default=dict, nullable=False)
+    exclude_keywords = Column(JSON, default=list, nullable=False)
+    item_ids = Column(JSON, default=list, nullable=False)
+    is_builtin = Column(Boolean, default=False, nullable=False)
+    enabled = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class EnvironmentRuleSet(Base):
+    __tablename__ = "environment_rule_sets"
+    __table_args__ = (UniqueConstraint("environment_id", "rule_set_id", name="ux_environment_rule_sets_env_rule"),)
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("ers"))
+    environment_id = Column(String(40), ForeignKey("app_environments.id", ondelete="CASCADE"), nullable=False, index=True)
+    rule_set_id = Column(String(40), ForeignKey("rule_sets.id", ondelete="CASCADE"), nullable=False, index=True)
+    enabled = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    environment = relationship("AppEnvironment", back_populates="rule_sets")
+    rule_set = relationship("RuleSet")
 
 
 class CronPlan(Base):
@@ -456,7 +489,7 @@ class AiAssistantSetting(Base):
     enabled = Column(Boolean, default=False, nullable=False)
     model_id = Column(String(40), ForeignKey("ai_model_configs.id", ondelete="SET NULL"))
     name = Column(String(80), default="OpsRadar AI", nullable=False)
-    welcome_message = Column(Text, default="你好，我可以基于当前页面上下文辅助排障。", nullable=False)
+    welcome_message = Column(Text, default="👋 你好，我是 OpsRadar AI 智能巡检助手", nullable=False)
     quick_prompts = Column(JSON, default=list, nullable=False)
     prompt_templates = Column(JSON, default=list, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)

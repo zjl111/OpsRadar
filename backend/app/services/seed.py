@@ -8,10 +8,12 @@ from backend.app.models import (
     AnalysisRule,
     AppEnvironment,
     Application,
+    EnvironmentRuleSet,
     InspectionItem,
     Resource,
     ResourceType,
     Role,
+    RuleSet,
     SiteSetting,
 )
 
@@ -377,31 +379,118 @@ def seed_builtin_data(db: Session) -> None:
         else:
             db.add(InspectionItem(id=item_id, **values))
     db.commit()
-    backfill_resource_rule_bindings(db)
+    seed_rule_sets(db)
 
 
-def backfill_resource_rule_bindings(db: Session) -> None:
-    defaults = {
-        "host": ["itm_os_cpu", "itm_os_memory", "itm_os_disk_inode", "itm_os_load", "itm_os_time_sync"],
-        "linux": ["itm_os_cpu", "itm_os_memory", "itm_os_disk_inode", "itm_os_load", "itm_os_time_sync"],
-        "server": ["itm_os_cpu", "itm_os_memory", "itm_os_disk_inode", "itm_os_load", "itm_os_time_sync"],
-        "container": ["itm_container_state", "itm_container_stats", "itm_container_inspect_restart"],
-        "compose": ["itm_compose_ps", "itm_compose_logs_error"],
-        "systemd": ["itm_systemd_active", "itm_systemd_logs_error"],
-        "pgsql": ["itm_pg_conn_ratio", "itm_pg_slow_query", "itm_pg_replication_lag"],
-        "mysql": ["itm_mysql_conn_ratio", "itm_mysql_slow_query", "itm_mysql_deadlock"],
-        "redis": ["itm_redis_memory", "itm_redis_connections", "itm_redis_slowlog"],
-        "middleware": ["itm_mid_http_status", "itm_mid_ssl_expiry"],
-    }
+def seed_rule_sets(db: Session) -> None:
+    defaults = [
+        (
+            "rset_linux_basic",
+            "Linux 基础巡检",
+            "resource",
+            ["host", "linux", "server"],
+            [],
+            {"match": "所有 Linux 主机"},
+            ["itm_os_cpu", "itm_os_memory", "itm_os_disk_inode", "itm_os_load", "itm_os_time_sync"],
+            "适用于 Linux / Unix 主机的基础性能与容量巡检。",
+        ),
+        (
+            "rset_linux_security",
+            "Linux 安全基线",
+            "resource",
+            ["host", "linux", "server"],
+            [],
+            {"match": "所有 Linux 主机"},
+            ["itm_os_ssh_root", "itm_os_ssh_password", "itm_os_listen_ports", "itm_os_sudoers", "itm_os_shadow_perm", "itm_os_auditd", "itm_os_firewall", "itm_os_patch_age"],
+            "适用于 Linux 主机的账号、SSH、端口、审计和补丁基线。",
+        ),
+        (
+            "rset_docker_container",
+            "Docker 容器巡检",
+            "service",
+            ["container"],
+            ["docker_container"],
+            {"match": "仅发现 Docker 容器时执行"},
+            ["itm_container_state", "itm_container_stats", "itm_container_inspect_restart"],
+            "适用于服务发现生成的 Docker 容器服务。",
+        ),
+        (
+            "rset_docker_compose",
+            "Docker Compose 巡检",
+            "service",
+            ["compose"],
+            ["docker_compose"],
+            {"match": "仅发现 Compose 项目服务时执行"},
+            ["itm_compose_ps", "itm_compose_logs_error"],
+            "适用于服务发现生成的 Docker Compose 服务。",
+        ),
+        (
+            "rset_systemd_service",
+            "Systemd 服务巡检",
+            "service",
+            ["systemd"],
+            ["systemd"],
+            {"match": "仅发现 Systemd 服务时执行"},
+            ["itm_systemd_active", "itm_systemd_logs_error"],
+            "适用于服务发现生成的 Systemd 服务。",
+        ),
+        (
+            "rset_mysql",
+            "MySQL 专项巡检",
+            "resource",
+            ["mysql"],
+            [],
+            {"match": "资源类型 = MySQL"},
+            ["itm_mysql_conn_ratio", "itm_mysql_slow_query", "itm_mysql_deadlock", "itm_mysql_anonymous", "itm_mysql_local_infile"],
+            "适用于作为平级资产创建的 MySQL 数据库。",
+        ),
+        (
+            "rset_postgresql",
+            "PostgreSQL 专项巡检",
+            "resource",
+            ["pgsql", "postgresql"],
+            [],
+            {"match": "资源类型 = PostgreSQL"},
+            ["itm_pg_conn_ratio", "itm_pg_slow_query", "itm_pg_replication_lag", "itm_pg_pg_hba", "itm_pg_logging"],
+            "适用于作为平级资产创建的 PostgreSQL 数据库。",
+        ),
+        (
+            "rset_redis",
+            "Redis 专项巡检",
+            "resource",
+            ["redis"],
+            [],
+            {"match": "资源类型 = Redis"},
+            ["itm_redis_memory", "itm_redis_connections", "itm_redis_slowlog", "itm_redis_protected_mode", "itm_redis_persistence"],
+            "适用于作为平级资产创建的 Redis 服务。",
+        ),
+    ]
     all_ids = {item.id for item in db.query(InspectionItem.id).filter(InspectionItem.enabled.is_(True)).all()}
-    changed = False
-    for resource in db.query(Resource).all():
-        extra = dict(resource.extra_params or {})
-        if extra.get("rules_manually_configured") and "bound_inspection_item_ids" in extra:
-            continue
-        ids = [item_id for item_id in defaults.get(resource.type, []) if item_id in all_ids]
-        extra["bound_inspection_item_ids"] = ids
-        resource.extra_params = extra
-        changed = True
-    if changed:
+    for rule_id, name, target_kind, resource_types, service_types, conditions, item_ids, description in defaults:
+        rule_set = db.get(RuleSet, rule_id) or db.query(RuleSet).filter(RuleSet.name == name).one_or_none()
+        if not rule_set:
+            rule_set = RuleSet(id=rule_id, name=name)
+            db.add(rule_set)
+        rule_set.name = name
+        rule_set.description = description
+        rule_set.target_kind = target_kind
+        rule_set.resource_types = resource_types
+        rule_set.service_types = service_types
+        rule_set.conditions = conditions
+        rule_set.exclude_keywords = []
+        rule_set.item_ids = [item_id for item_id in item_ids if item_id in all_ids]
+        rule_set.is_builtin = True
+        rule_set.enabled = True
+    db.commit()
+
+    linux_rule = db.get(RuleSet, "rset_linux_basic")
+    if linux_rule:
+        for environment in db.query(AppEnvironment).all():
+            exists = (
+                db.query(EnvironmentRuleSet)
+                .filter(EnvironmentRuleSet.environment_id == environment.id, EnvironmentRuleSet.rule_set_id == linux_rule.id)
+                .one_or_none()
+            )
+            if not exists:
+                db.add(EnvironmentRuleSet(environment_id=environment.id, rule_set_id=linux_rule.id, enabled=True))
         db.commit()
