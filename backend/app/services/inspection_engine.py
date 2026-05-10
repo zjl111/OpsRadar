@@ -9,7 +9,7 @@ from backend.app.db.session import SessionLocal
 from backend.app.models import AiAnalysisJob, AiAnalysisResult, AppEnvironment, AuditLog, EnvironmentResource, InspectionItem, Issue, Resource, Task, TaskLog, TaskResult
 from backend.app.services.analysis import build_issue_insight
 from backend.app.services.diagnose_tools import diagnose_summary_for_issue
-from backend.app.services.executors import ExecutionContext, InspectionExecutor
+from backend.app.services.executors import ExecutionContext, ExecutionResult, InspectionExecutor
 
 
 def _resource_snapshot(resource: Resource) -> dict:
@@ -59,9 +59,33 @@ def _compatible(resource: Resource, item: InspectionItem) -> bool:
         return True
     if resource.type in {"host", "linux", "server"} and item.category in {"host", "security", "os"}:
         return True
-    if resource.type in {"container", "compose", "systemd"} and item.category == "container":
+    if resource.type in {"container", "compose", "systemd"} and item.command_type == "shell" and item.category in {"container", "redis", "middleware"}:
+        return True
+    if resource.type in {"container", "compose", "systemd"} and item.category in {"mysql", "postgresql", "pgsql", "sqlserver"}:
         return True
     return False
+
+
+def _missing_service_connection_credential(resource: dict, item: dict) -> str:
+    extra = dict(resource.get("extra_params") or {})
+    category = str(item.get("category") or "")
+    command_type = str(item.get("command_type") or "")
+    credential_target = str(extra.get("service_credential_target") or "")
+    deep_categories = {"redis", "mysql", "postgresql", "pgsql", "sqlserver", "database"}
+    if not extra.get("requires_service_credentials"):
+        return ""
+    if extra.get("service_credential_configured"):
+        return ""
+    if category not in deep_categories and command_type not in {"sql", "redis"}:
+        return ""
+    target_label = {
+        "redis": "Redis",
+        "mysql": "MySQL",
+        "postgresql": "PostgreSQL",
+        "pgsql": "PostgreSQL",
+        "sqlserver": "SQL Server",
+    }.get(credential_target, "service")
+    return f"Skipped: {target_label} connection credential is not configured for this discovered service."
 
 
 def create_manual_task(
@@ -192,7 +216,7 @@ async def run_task(task_id: str) -> None:
         db.commit()
 
         results = db.query(TaskResult).filter(TaskResult.task_id == task.id).order_by(TaskResult.id).all()
-        counters = {"success": 0, "fail": 0, "exception": 0}
+        counters = {"success": 0, "fail": 0, "exception": 0, "skipped": 0}
         executor = InspectionExecutor()
         for result in results:
             db.refresh(task)
@@ -218,14 +242,18 @@ async def run_task(task_id: str) -> None:
                             "extra_params": current_resource.extra_params,
                         }
                     )
-            execution = await executor.execute(ExecutionContext(resource=resource_for_execution, item=result.item_snapshot))
+            skip_reason = _missing_service_connection_credential(resource_for_execution, result.item_snapshot or {})
+            if skip_reason:
+                execution = ExecutionResult("skipped", "", skip_reason, 0)
+            else:
+                execution = await executor.execute(ExecutionContext(resource=resource_for_execution, item=result.item_snapshot))
             result.status = execution.status
             result.output = execution.output
             result.error_message = execution.error_message
             result.execution_time_ms = execution.execution_time_ms
             result.finished_at = datetime.now(timezone.utc)
             counters[execution.status] += 1
-            log_level = "info" if execution.status == "success" else "warning" if execution.status == "fail" else "error"
+            log_level = "info" if execution.status in {"success", "skipped"} else "warning" if execution.status == "fail" else "error"
             _append_log(db, task.id, log_level, f"{result.resource_snapshot.get('name')} / {result.item_snapshot.get('name')} -> {execution.status}.")
             if execution.status in {"fail", "exception"}:
                 issue = Issue(

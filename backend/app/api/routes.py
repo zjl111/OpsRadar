@@ -67,6 +67,7 @@ from backend.app.schemas import (
     ResourceTypePayload,
     ResourceUpdate,
     RoleUpdate,
+    ServiceCredentialPayload,
     SiteSettingsUpdate,
     ServiceDiscoveryRequest,
     UserCreate,
@@ -74,7 +75,7 @@ from backend.app.schemas import (
 )
 from backend.app.services.analysis import build_issue_insight, environment_overview
 from backend.app.services.inspection_engine import create_manual_task
-from backend.app.services.crypto import decrypt_secret, has_encrypted_credential, set_encrypted_credential
+from backend.app.services.crypto import decrypt_secret, encrypt_secret, has_encrypted_credential, set_encrypted_credential
 from backend.app.services.diagnose_tools import (
     diagnose_evidence,
     diagnose_summary_for_issue,
@@ -769,7 +770,7 @@ def create_application(payload: ApplicationPayload, db: Annotated[Session, Depen
             name=environment_name_for_type(env_type),
             env_type=env_type,
             owner=app.owner,
-            description=f"{app.name} 默认{environment_name_for_type(env_type)}",
+            description=app.description or f"{app.name} 默认{environment_name_for_type(env_type)}",
             status=app.status,
         )
     )
@@ -792,6 +793,11 @@ def update_application(application_id: str, payload: ApplicationPayload, db: Ann
     values.pop("env_type", None)
     for field, value in values.items():
         setattr(app, field, value)
+    primary_env = db.query(AppEnvironment).filter(AppEnvironment.application_id == app.id).order_by(AppEnvironment.created_at.asc()).first()
+    if primary_env:
+        primary_env.owner = app.owner
+        primary_env.status = app.status
+        primary_env.description = app.description or primary_env.description
     db.add(AuditLog(actor=user.display_name, action="update_application", target=app.name, detail=app.owner))
     db.commit()
     db.refresh(app)
@@ -2279,6 +2285,32 @@ def delete_discovered_service(service_id: str, db: Annotated[Session, Depends(ge
     db.add(AuditLog(actor=user.display_name, action="delete_discovered_service", target=service_name, detail=service_id))
     db.commit()
     return {"deleted": service_id}
+
+
+@router.patch("/discovered-services/{service_id}/credential")
+def update_discovered_service_credential(
+    service_id: str,
+    payload: ServiceCredentialPayload,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_user)],
+) -> dict:
+    require_permission(db, user, "resources:update")
+    service = db.get(DiscoveredService, service_id)
+    if not service or not service.service_resource_id:
+        raise HTTPException(status_code=404, detail="Discovered service not found")
+    resource = db.get(Resource, service.service_resource_id)
+    if not resource:
+        raise HTTPException(status_code=404, detail="Service resource not found")
+    extra = dict(resource.extra_params or {})
+    extra["service_credential_username"] = payload.username or ""
+    extra["service_credential_encrypted"] = encrypt_secret(payload.credential_secret)
+    extra["service_credential_configured"] = True
+    resource.extra_params = extra
+    service.bound_rule_count = len(extra.get("bound_inspection_item_ids") or [])
+    db.add(AuditLog(actor=user.display_name, action="update_service_credential", target=service.name, detail=service.id))
+    db.commit()
+    db.refresh(service)
+    return discovered_service_payload(service)
 
 
 @router.post("/inspection-items")

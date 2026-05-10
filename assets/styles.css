@@ -2586,6 +2586,7 @@ button {
 
 .status.pending,
 .status.cancelled,
+.status.skipped,
 .status.untested,
 .status.ignored,
 .status.disabled,
@@ -4021,7 +4022,7 @@ button {
   background: var(--surface-2);
   padding: 12px;
   display: grid;
-  grid-template-columns: 132px minmax(180px, 1fr) 90px minmax(220px, 1.2fr) minmax(180px, auto);
+  grid-template-columns: 132px minmax(220px, 1fr) minmax(150px, auto);
   gap: 12px;
   align-items: center;
 }
@@ -4077,6 +4078,24 @@ button {
   color: var(--text-soft);
   font-size: 12px;
   font-weight: 800;
+}
+
+.service-credential-badge {
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.service-credential-badge.missing {
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  color: var(--danger);
+}
+
+.service-credential-badge.configured {
+  background: color-mix(in srgb, var(--brand) 10%, var(--surface));
+  color: var(--brand-strong);
 }
 
 .service-bound-badge {

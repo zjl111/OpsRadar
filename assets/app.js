@@ -174,8 +174,10 @@ const I18N = {
     "resources.desc": "Hosts, databases and middleware instances with connection status.",
     "resources.testOnline": "One-click test",
     "resources.testSelected": "Test selected",
+    "resources.discoverOnline": "One-click discover",
+    "resources.discoverSelected": "Discover selected",
     "resources.discoverServices": "Discover services",
-    "resources.discovering": "Discovering",
+    "resources.discovering": "Scanning",
     "resources.serviceCount": "Services",
     "resources.applyRecommendedRules": "Apply recommended rules",
     "resources.test": "Test",
@@ -277,13 +279,13 @@ const I18N = {
     "tasks.fixTasks": "Remediation Tasks",
     "environments.title": "Resources",
     "environments.desc": "Inspect by business system environment: OS, database, middleware, gateway, storage, queue, containers and security baselines.",
-    "environments.applications": "Application Environments",
+    "environments.applications": "Applications",
     "environments.resources": "Resource Inventory",
     "environments.health": "Health Score",
     "environments.layers": "Layer Status",
     "environments.insights": "Issue Insights",
     "environments.addApplication": "Add application",
-    "environments.addEnvironment": "Add environment",
+    "environments.addEnvironment": "New application",
     "environments.bindResource": "Bind resource",
     "environments.noData": "No application environment data yet.",
     "environments.unknown": "Unknown",
@@ -562,8 +564,10 @@ const I18N = {
     "resources.desc": "主机、数据库与中间件实例，以及连接状态。",
     "resources.testOnline": "一键测试",
     "resources.testSelected": "测试所选",
+    "resources.discoverOnline": "一键发现",
+    "resources.discoverSelected": "发现所选",
     "resources.discoverServices": "发现服务",
-    "resources.discovering": "发现中",
+    "resources.discovering": "扫描中",
     "resources.serviceCount": "服务",
     "resources.applyRecommendedRules": "应用推荐规则",
     "resources.test": "测试",
@@ -665,13 +669,13 @@ const I18N = {
     "tasks.fixTasks": "修复任务",
     "environments.title": "资源",
     "environments.desc": "以业务系统环境为中心组织巡检：覆盖 OS、数据库、中间件、网关、存储、队列、容器服务与安全基线。",
-    "environments.applications": "应用环境",
+    "environments.applications": "应用列表",
     "environments.resources": "资源列表",
     "environments.health": "健康评分",
     "environments.layers": "分层状态",
     "environments.insights": "异常洞察",
     "environments.addApplication": "添加应用",
-    "environments.addEnvironment": "添加环境",
+    "environments.addEnvironment": "新建应用",
     "environments.bindResource": "绑定资源",
     "environments.noData": "暂无应用环境数据。",
     "environments.unknown": "未知",
@@ -1041,7 +1045,7 @@ function statusClass(status) {
   if (["active", "online", "success", "finished", "resolved", "healthy"].includes(status)) return status;
   if (["running", "queued", "in_progress", "testing", "review", "fail", "warning"].includes(status)) return status;
   if (["offline", "exception", "open", "failed", "critical"].includes(status)) return status;
-  if (["cancelled", "disabled"].includes(status)) return status;
+  if (["cancelled", "disabled", "skipped"].includes(status)) return status;
   return status || "pending";
 }
 
@@ -1060,6 +1064,7 @@ function statusText(status) {
       finished: "Finished",
       failed: "Failed",
       cancelled: "Cancelled",
+      skipped: "Skipped",
       success: "Success",
       fail: "Failed",
       exception: "Exception",
@@ -1086,6 +1091,7 @@ function statusText(status) {
       finished: "已完成",
       failed: "失败",
       cancelled: "已取消",
+      skipped: "已跳过",
       success: "成功",
       fail: "失败",
       exception: "异常",
@@ -1150,13 +1156,17 @@ function applicationOptions() {
   return applications().map((app) => [app.id, app.name]);
 }
 
+function displayApplicationName(name) {
+  return String(name || "-").replace(/\s*环境\s*$/, "") || "-";
+}
+
 function environmentOptions() {
-  return [["", "-"], ...environments().map((env) => [env.id, `${env.application_name || "-"} / ${env.name}`])];
+  return [["", "-"], ...environments().map((env) => [env.id, `${displayApplicationName(env.application_name)} / ${env.name}`])];
 }
 
 function environmentName(id) {
   const env = environments().find((item) => item.id === id);
-  return env ? `${env.application_name || "-"} / ${env.name}` : "";
+  return env ? `${displayApplicationName(env.application_name)} / ${env.name}` : "";
 }
 
 function environmentLayerLabel(layer) {
@@ -2755,11 +2765,12 @@ function renderEnvironmentCard(env) {
   const score = overview.health_score;
   const counts = environmentMetricCounts(env);
   const latestTaskTime = counts.latestTask?.created_at ? formatDate(counts.latestTask.created_at) : "-";
+  const app = applications().find((item) => item.id === env.application_id || item.name === env.application_name);
   return `
     <article class="environment-card">
       <div class="environment-card-head">
         <div>
-          <h3>${escapeHtml(env.application_name || "-")} 环境 / ${escapeHtml(env.name)}</h3>
+          <h3>${escapeHtml(displayApplicationName(env.application_name))} / ${escapeHtml(env.name)}</h3>
           <p>${escapeHtml(env.env_type || "-")} · ${escapeHtml(env.owner || "SRE")} · ${escapeHtml(env.description || env.name || "-")}</p>
         </div>
         ${environmentStatusBadge(env.status)}
@@ -2778,8 +2789,8 @@ function renderEnvironmentCard(env) {
           ${environmentActionButton(env, "env-create-task", state.lang === "zh" ? "创建巡检" : "Create task")}
         </div>
         <div class="env-secondary-actions">
-          ${environmentActionButton(env, "edit-environment", t("action.edit"))}
-          <button class="icon-button" type="button" data-action="delete-environment" data-id="${escapeHtml(env.id)}" title="${t("action.confirmDelete")}">⋮</button>
+          ${app ? `<button class="btn small" data-action="edit-application" data-id="${escapeHtml(app.id)}">${t("action.edit")}</button>` : ""}
+          ${app ? `<button class="btn danger small" type="button" data-action="delete-application" data-id="${escapeHtml(app.id)}">${state.lang === "zh" ? "删除" : "Delete"}</button>` : ""}
         </div>
       </div>
     </article>
@@ -2795,7 +2806,7 @@ function renderEnvironmentApplications() {
     <select class="filter-select" data-env-status-filter>
       ${environmentStatusOptions().map(([value, label]) => `<option value="${escapeHtml(value)}" ${status === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
     </select>
-    <button class="btn primary small" data-action="add-environment">${state.lang === "zh" ? "新建环境" : "New environment"}</button>
+    <button class="btn primary small" data-action="add-application">${t("environments.addEnvironment")}</button>
   `;
   return `
     <div class="module-pane env-module env-card-module">
@@ -2864,6 +2875,39 @@ function boundRuleIdsForService(service) {
   return [...new Set([...(service?.bound_rule_ids || []), ...boundRuleIdsForResource(serviceResource(service))].filter(Boolean))];
 }
 
+function inspectionItemName(itemId) {
+  const item = (state.data.inspection_items || []).find((entry) => entry.id === itemId);
+  return item?.name || itemId;
+}
+
+function inspectionItemById(itemId) {
+  return (state.data.inspection_items || []).find((entry) => entry.id === itemId) || { id: itemId, name: itemId, category: "", command_type: "" };
+}
+
+function boundRuleLabelsForService(service) {
+  return boundRuleIdsForService(service).map(inspectionItemName);
+}
+
+function serviceCredentialTargetLabel(target) {
+  const map = {
+    redis: "Redis",
+    mysql: "MySQL",
+    postgresql: "PostgreSQL",
+    pgsql: "PostgreSQL",
+    sqlserver: "SQL Server",
+  };
+  return map[target] || (state.lang === "zh" ? "连接" : "Connection");
+}
+
+function serviceNeedsConnectionCredential(service, item) {
+  const category = String(item?.category || "").toLowerCase();
+  const commandType = String(item?.command_type || "").toLowerCase();
+  return Boolean(service?.requires_credentials) && (
+    ["redis", "mysql", "postgresql", "pgsql", "sqlserver", "database"].includes(category) ||
+    ["redis", "sql"].includes(commandType)
+  );
+}
+
 function resourceServiceButton(res) {
   const count = resourceServices(res.id).length;
   const expanded = state.expandedResources.has(res.id);
@@ -2871,7 +2915,7 @@ function resourceServiceButton(res) {
   return `
     <button class="service-toggle-button ${expanded ? "active" : ""}" data-action="toggle-resource-services" data-id="${escapeHtml(res.id)}" ${discovering ? "disabled" : ""}>
       ${icon("apps")}
-      <span>${discovering ? t("resources.discovering") : t("resources.serviceCount")}</span>
+      <span>${t("resources.serviceCount")}</span>
       <b>${escapeHtml(count)}</b>
       <i>${expanded ? "⌃" : "⌄"}</i>
     </button>
@@ -2883,6 +2927,19 @@ function resourceBulkTestButton(total) {
   const testing = state.testingResources.size > 0;
   const label = count ? `${t("resources.testSelected")} (${count})` : `${t("resources.testOnline")} (${total})`;
   return `<button class="btn small ${testing ? "testing-button" : ""}" data-action="test-selected-resources" ${testing || !total ? "disabled" : ""}>${testing ? `<span class="tiny-spinner"></span>${t("resources.testing")}` : label}</button>`;
+}
+
+function isDiscoverableHost(res) {
+  return ["host", "linux", "server"].includes(res.type) && res.status === "online";
+}
+
+function resourceBulkDiscoverButton(resources) {
+  const selected = [...selectionSet("resources")];
+  const selectedResources = selected.length ? resources.filter((item) => selected.includes(item.id)) : [];
+  const targets = selected.length ? selectedResources.filter(isDiscoverableHost) : resources.filter(isDiscoverableHost);
+  const discovering = state.discoveringResources.size > 0;
+  const label = selected.length ? `${t("resources.discoverSelected")} (${targets.length})` : `${t("resources.discoverOnline")} (${targets.length})`;
+  return `<button class="btn small ${discovering ? "testing-button" : ""}" data-action="discover-selected-services" ${discovering || !targets.length ? "disabled" : ""}>${discovering ? `<span class="tiny-spinner"></span>${t("resources.discovering")}` : label}</button>`;
 }
 
 function columnPicker() {
@@ -2923,6 +2980,7 @@ function renderResourceListPanel() {
     <button class="btn primary small" data-action="add-resource">${t("action.addResource")}</button>
     ${columnPicker()}
     ${resourceBulkTestButton(filtered.length)}
+    ${resourceBulkDiscoverButton(filtered)}
   `;
   const columns = visibleResourceColumns();
   return `
@@ -2981,8 +3039,7 @@ function renderResourceServiceRow(resource, colspan) {
 }
 
 function renderDiscoveredServiceCard(service) {
-  const labels = service.labels || [];
-  const boundCount = boundRuleIdsForService(service).length || service.bound_rule_count || labels.length || 1;
+  const credentialLabel = serviceCredentialTargetLabel(service.credential_target);
   return `
     <article class="discovered-service-card">
       <div class="service-kind ${escapeHtml(service.discovery_type)}">${serviceTypeLabel(service.discovery_type)}</div>
@@ -2990,13 +3047,8 @@ function renderDiscoveredServiceCard(service) {
         <strong>${escapeHtml(service.name)}</strong>
         <small>${escapeHtml([service.image, service.systemd_unit, service.port ? `${service.port}/${service.protocol || "tcp"}` : ""].filter(Boolean).join(" · ") || service.identity)}</small>
       </div>
-      <span class="status ${service.status === "running" || service.status === "active" ? "success" : service.status === "missing" ? "offline" : "pending"}">${escapeHtml(statusText(service.status))}</span>
-      <div class="service-rules">
-        ${labels.map((label) => `<span>${escapeHtml(label)}</span>`).join("") || `<span>${state.lang === "zh" ? "基础巡检规则集" : "Baseline rule set"}</span>`}
-      </div>
       <div class="service-card-actions">
-        <span class="service-bound-badge">${state.lang === "zh" ? `已绑定 ${boundCount}` : `Bound ${boundCount}`}</span>
-        <button class="btn micro" type="button" data-action="bind-service-rules" data-id="${escapeHtml(service.id)}">${state.lang === "zh" ? "规则" : "Rules"}</button>
+        ${service.requires_credentials ? `<button class="btn micro ${service.service_credential_configured ? "" : "primary"}" type="button" data-action="configure-service-credential" data-id="${escapeHtml(service.id)}">${escapeHtml(service.service_credential_configured ? (state.lang === "zh" ? "更新凭据" : "Update credential") : (state.lang === "zh" ? "配置凭据" : "Configure credential"))}</button>` : ""}
         <button class="btn micro danger" type="button" data-action="delete-discovered-service" data-id="${escapeHtml(service.id)}">${state.lang === "zh" ? "删除" : "Delete"}</button>
       </div>
     </article>
@@ -3033,7 +3085,7 @@ function taskRows() {
       owner: taskOwner(task.created_by),
       schedule: task.started_at || task.created_at,
       period: "",
-      target: task.environment_name ? `${task.application_name || "-"} / ${task.environment_name}` : `资源结果 ${task.summary?.total || 0}`,
+      target: task.environment_name ? `${displayApplicationName(task.application_name)} / ${task.environment_name}` : `资源结果 ${task.summary?.total || 0}`,
       progress: taskProgress(task),
       sortTime: task.started_at || task.created_at,
     };
@@ -3227,8 +3279,8 @@ function renderTasks() {
 
 function summaryText(summary = {}) {
   return state.lang === "zh"
-    ? `成功 ${summary.success || 0} / 失败 ${summary.fail || 0} / 异常 ${summary.exception || 0} / 总计 ${summary.total || 0}`
-    : `S ${summary.success || 0} / F ${summary.fail || 0} / E ${summary.exception || 0} / T ${summary.total || 0}`;
+    ? `成功 ${summary.success || 0} / 失败 ${summary.fail || 0} / 异常 ${summary.exception || 0} / 跳过 ${summary.skipped || 0} / 总计 ${summary.total || 0}`
+    : `S ${summary.success || 0} / F ${summary.fail || 0} / E ${summary.exception || 0} / Skip ${summary.skipped || 0} / T ${summary.total || 0}`;
 }
 
 
@@ -3324,7 +3376,7 @@ function issueCell(issue, key) {
       <div class="muted mono">${escapeHtml(issue.id)}</div>
       ${issue.insight ? `<div class="issue-insight-mini"><b>${escapeHtml(issue.insight.risk_level || issue.severity || "medium")}</b>${escapeHtml(issue.insight.recommendation || issue.insight.probable_cause || "")}</div>` : ""}
     </td>`,
-    application: `<td>${escapeHtml(issue.application_name || "-")}</td>`,
+    application: `<td>${escapeHtml(displayApplicationName(issue.application_name))}</td>`,
     environment: `<td>${escapeHtml(issue.environment_name || "-")}</td>`,
     resourceName: `<td>${escapeHtml(issue.resource_name || "-")}</td>`,
     resourceIp: `<td class="mono">${escapeHtml(issue.resource_ip || "-")}</td>`,
@@ -3835,7 +3887,7 @@ function renderTemplateBindings() {
         <table class="table">
           <thead><tr><th>${t("table.environmentBinding")}</th><th>${t("table.owner")}</th><th>${t("templates.builtin")}</th><th>${t("templates.custom")}</th></tr></thead>
           <tbody>
-            ${envs.map((env) => `<tr><td><strong>${escapeHtml(env.application_name || "-")} / ${escapeHtml(env.name)}</strong><div class="muted mono">${escapeHtml(env.id)}</div></td><td>${escapeHtml(env.owner || "-")}</td><td>基础巡检 + 安全基线</td><td>${env.env_type === "prod" ? "PROD 强化脚本" : "-"}</td></tr>`).join("") || `<tr><td colspan="4"><div class="empty">${t("search.empty")}</div></td></tr>`}
+            ${envs.map((env) => `<tr><td><strong>${escapeHtml(displayApplicationName(env.application_name))} / ${escapeHtml(env.name)}</strong><div class="muted mono">${escapeHtml(env.id)}</div></td><td>${escapeHtml(env.owner || "-")}</td><td>基础巡检 + 安全基线</td><td>${env.env_type === "prod" ? "PROD 强化脚本" : "-"}</td></tr>`).join("") || `<tr><td colspan="4"><div class="empty">${t("search.empty")}</div></td></tr>`}
           </tbody>
         </table>
       </div>
@@ -4845,7 +4897,7 @@ function modalConfig(type, id) {
     const selectedServiceIds = new Set(config.service_ids || []);
     const environmentCardOptions = environments().map((env) => ({
       value: env.id,
-      label: `${env.application_name || "-"} / ${env.name}`,
+      label: `${displayApplicationName(env.application_name)} / ${env.name}`,
       meta: `${env.env_type || "-"} / ${env.owner || "SRE"} / ${state.lang === "zh" ? "资源" : "resources"} ${(env.resources || []).length}`,
         checked: (task?.environment_id || config.environment_id || defaults.environment_id || "") === env.id,
     }));
@@ -4974,20 +5026,39 @@ function modalConfig(type, id) {
       ].join(""),
     };
   }
+  if (type === "service-credential") {
+    const service = (state.data.discovered_services || []).find((item) => item.id === id);
+    if (!service) return null;
+    const label = serviceCredentialTargetLabel(service.credential_target);
+    return {
+      title: state.lang === "zh" ? "配置服务凭据" : "Configure Service Credential",
+      subtitle: `${service.name} · ${label}`,
+      submitLabel: service.service_credential_configured ? t("action.save") : (state.lang === "zh" ? "保存凭据" : "Save credential"),
+      body: [
+        fieldInput("Username", "username", "", "text", `placeholder="${state.lang === "zh" ? "可选，例如 default / root / app_user" : "Optional, such as default / root / app_user"}"`),
+        fieldTextarea(state.lang === "zh" ? "密码 / Token" : "Password / Token", "credential_secret", "", `required placeholder="${state.lang === "zh" ? "仅保存加密后的连接凭据，不会在页面回显" : "Stored encrypted and never displayed again"}"`),
+      ].join(""),
+    };
+  }
   if (type === "application") {
     const isNew = id === "new";
     const app = isNew ? { name: "", owner: "SRE", description: "", status: "active", env_type: "prod" } : applications().find((item) => item.id === id);
     if (!app) return null;
+    const primaryEnv = isNew ? null : environments().find((env) => env.application_id === app.id || env.application_name === app.name);
+    const envType = primaryEnv?.env_type || app.env_type || "prod";
+    const owner = primaryEnv?.owner || app.owner || "SRE";
+    const status = primaryEnv?.status || app.status || "active";
+    const description = primaryEnv?.description || app.description || "";
     return {
-      title: isNew ? t("modal.addApplication") : t("modal.editApplication"),
+      title: isNew ? t("environments.addEnvironment") : (state.lang === "zh" ? "编辑应用" : "Edit application"),
       subtitle: t("environments.applications"),
       submitLabel: isNew ? t("action.create") : t("action.save"),
       body: [
-        fieldInput(t("table.name"), "name", app.name, "text", "required"),
-        isNew ? fieldSelect(t("form.environmentType"), "env_type", app.env_type || "prod", [["prod", "Production"], ["staging", "Staging"], ["test", "Test"], ["dev", "Dev"]], "required") : "",
-        fieldInput(t("table.owner"), "owner", app.owner || "SRE", "text", "required"),
-        fieldSelect(t("form.status"), "status", app.status || "active", [["active", statusText("active")], ["review", statusText("review")], ["disabled", statusText("disabled")]], "required"),
-        fieldTextarea(t("table.description"), "description", app.description || ""),
+        fieldInput(state.lang === "zh" ? "应用名称" : "Application name", "name", isNew ? app.name : displayApplicationName(app.name), "text", "required"),
+        fieldSelect(t("form.environmentType"), "env_type", envType, [["prod", "Production"], ["staging", "Staging"], ["test", "Test"], ["dev", "Dev"]], "required"),
+        fieldInput(t("table.owner"), "owner", owner, "text", "required"),
+        fieldSelect(t("form.status"), "status", status, [["active", statusText("active")], ["review", statusText("review")], ["disabled", statusText("disabled")]], "required"),
+        fieldTextarea(t("table.description"), "description", description),
       ].join(""),
     };
   }
@@ -5136,7 +5207,7 @@ function modalConfig(type, id) {
     const selectedEnvIds = new Set((res.environment_bindings || []).map((binding) => binding.environment_id));
     const envOptions = environments().map((env) => ({
       value: env.id,
-      label: `${env.application_name || "-"} / ${env.name}`,
+      label: `${displayApplicationName(env.application_name)} / ${env.name}`,
       meta: `${env.env_type || "-"} / ${env.owner || "SRE"}`,
       checked: selectedEnvIds.has(env.id),
     }));
@@ -5444,6 +5515,12 @@ function editPayloadFromForm(form) {
       exclude_keywords: splitKeywords(values.exclude_keywords),
     };
   }
+  if (form.dataset.type === "service-credential") {
+    return {
+      username: values.username || "",
+      credential_secret: values.credential_secret || "",
+    };
+  }
   if (form.dataset.type === "application") {
     return {
       name: values.name,
@@ -5593,6 +5670,7 @@ function editEndpoint(type, id) {
     resource: id === "new" ? "/api/resources" : `/api/resources/${id}`,
     "resource-rules": `/api/resources/${id}/inspection-rules`,
     "service-discovery": `/api/resources/${id}/discover-services`,
+    "service-credential": `/api/discovered-services/${id}/credential`,
     "inspection-item": "/api/inspection-items",
     "ai-model": id === "new" ? "/api/ai/models" : `/api/ai/models/${id}`,
     "ai-datasource": id === "new" ? "/api/ai/datasources" : `/api/ai/datasources/${id}`,
@@ -5633,6 +5711,92 @@ async function refreshData(message = t("toast.synchronized")) {
   await loadBootstrap();
   render();
   toast(message);
+}
+
+async function startServiceDiscovery(resourceId, payload) {
+  state.modal = null;
+  state.expandedResources.add(resourceId);
+  state.discoveringResources.add(resourceId);
+  render();
+  toast(state.lang === "zh" ? "服务发现已启动，后台扫描中" : "Service discovery started in background");
+  try {
+    const result = await api(`/api/resources/${encodeURIComponent(resourceId)}/discover-services`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (result.resource) {
+      const index = state.data.resources.findIndex((item) => item.id === resourceId);
+      if (index >= 0) state.data.resources[index] = result.resource;
+    }
+    const existing = new Map((state.data.discovered_services || []).map((service) => [service.id, service]));
+    (result.services || []).forEach((service) => existing.set(service.id, service));
+    state.data.discovered_services = [...existing.values()];
+    const discoveredCount = (result.services || []).length;
+    toast(discoveredCount
+      ? `${t("toast.servicesDiscovered")}：${discoveredCount}`
+      : (state.lang === "zh" ? "服务发现完成，未发现符合条件的服务" : "Discovery finished. No matching services found."));
+  } catch (err) {
+    toast(friendlyError(err.message), "error");
+  } finally {
+    state.discoveringResources.delete(resourceId);
+    render();
+  }
+}
+
+function defaultServiceDiscoveryPayload() {
+  return {
+    discovery_types: ["docker_container", "docker_compose"],
+    include_keywords: [],
+    exclude_keywords: ["systemd-", "dbus", "session", "user@"],
+  };
+}
+
+async function discoverResourceBatch(resources) {
+  const targets = resources.filter(isDiscoverableHost);
+  if (!targets.length) {
+    toast(state.lang === "zh" ? "请选择在线 Linux 主机进行服务发现" : "Select online Linux hosts for service discovery", "error");
+    return;
+  }
+  targets.forEach((item) => {
+    state.discoveringResources.add(item.id);
+    state.expandedResources.add(item.id);
+  });
+  render();
+  toast(state.lang === "zh" ? `服务发现已启动：${targets.length} 台主机` : `Service discovery started for ${targets.length} host(s)`);
+  let success = 0;
+  let failed = 0;
+  let discovered = 0;
+  try {
+    for (const item of targets) {
+      try {
+        const result = await api(`/api/resources/${encodeURIComponent(item.id)}/discover-services`, {
+          method: "POST",
+          body: JSON.stringify(defaultServiceDiscoveryPayload()),
+        });
+        if (result.resource) {
+          const index = state.data.resources.findIndex((entry) => entry.id === item.id);
+          if (index >= 0) state.data.resources[index] = result.resource;
+        }
+        const existing = new Map((state.data.discovered_services || []).map((service) => [service.id, service]));
+        (result.services || []).forEach((service) => existing.set(service.id, service));
+        state.data.discovered_services = [...existing.values()];
+        discovered += (result.services || []).length;
+        success += 1;
+      } catch (err) {
+        failed += 1;
+      } finally {
+        state.discoveringResources.delete(item.id);
+        render();
+      }
+    }
+    const message = state.lang === "zh"
+      ? `服务发现完成：主机成功 ${success}，失败 ${failed}，发现服务 ${discovered}`
+      : `Service discovery finished: ${success} host(s) succeeded, ${failed} failed, ${discovered} service(s) discovered`;
+    toast(message, failed ? "error" : "success");
+  } finally {
+    targets.forEach((item) => state.discoveringResources.delete(item.id));
+    render();
+  }
 }
 
 function deleteEndpoint(scope, id) {
@@ -5803,21 +5967,20 @@ document.addEventListener("submit", async (event) => {
       toast(validationError, "error");
       return;
     }
+    if (type === "service-discovery") {
+      await startServiceDiscovery(id, editPayloadFromForm(form));
+      return;
+    }
     try {
       const isCreate = id === "new" || String(id).startsWith("env:");
-      const method = type === "service-discovery" ? "POST" : isCreate ? "POST" : "PATCH";
+      const method = isCreate ? "POST" : "PATCH";
       await api(editEndpoint(type, id), {
         method,
         body: JSON.stringify(editPayloadFromForm(form)),
       });
       state.modal = null;
-      if (type === "service-discovery") {
-        state.expandedResources.add(id);
-        await refreshData(t("toast.servicesDiscovered"));
-      } else {
-        if (type === "task-create") state.taskCreateDefaults = null;
-        await refreshData(t("toast.saved"));
-      }
+      if (type === "task-create") state.taskCreateDefaults = null;
+      await refreshData(t("toast.saved"));
     } catch (err) {
       const message = friendlyError(err.message);
       if (modalError) modalError.textContent = message;
@@ -6102,8 +6265,6 @@ document.addEventListener("click", async (event) => {
     } else if (action === "delete-application") {
       state.modal = { type: "delete-confirm", scope: "applications", ids: [target.dataset.id] };
       render();
-    } else if (action === "add-environment") {
-      openModal("environment", "new");
     } else if (action === "edit-environment") {
       openModal("environment", target.dataset.id);
     } else if (action === "delete-environment") {
@@ -6256,6 +6417,16 @@ document.addEventListener("click", async (event) => {
         ? rows.filter((item) => selected.includes(item.id))
         : filtered;
       await testResourceBatch(resources);
+    } else if (action === "discover-selected-services") {
+      const selected = [...selectionSet("resources")];
+      const rows = state.data.resources
+        .filter((res) => !(res.extra_params || {}).parent_resource_id)
+        .map((res) => ({ ...res, environment_label: (res.environment_names || []).join(" / ") }));
+      const filtered = filterRows("resources", rows, ["name", "type", "environment_label", "ip", "port", "os", "cpu", "memory", "status", "username"]);
+      const resources = selected.length
+        ? rows.filter((item) => selected.includes(item.id))
+        : filtered;
+      await discoverResourceBatch(resources);
     } else if (action === "toggle-resource-services") {
       const id = target.dataset.id;
       state.expandedResources.has(id) ? state.expandedResources.delete(id) : state.expandedResources.add(id);
@@ -6270,13 +6441,8 @@ document.addEventListener("click", async (event) => {
       openModal("resource", target.dataset.id);
     } else if (action === "bind-resource-rules") {
       openModal("resource-rules", target.dataset.id);
-    } else if (action === "bind-service-rules") {
-      const service = (state.data.discovered_services || []).find((item) => item.id === target.dataset.id);
-      if (!service?.service_resource_id) {
-        toast(state.lang === "zh" ? "该服务还没有纳管资源" : "This service has no managed resource", "error");
-        return;
-      }
-      openModal("resource-rules", service.service_resource_id);
+    } else if (action === "configure-service-credential") {
+      openModal("service-credential", target.dataset.id);
     } else if (action === "delete-discovered-service") {
       state.modal = { type: "delete-confirm", scope: "discovered-services", ids: [target.dataset.id] };
       render();

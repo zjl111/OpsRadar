@@ -37,6 +37,7 @@ SYSTEMD_COMMAND = """systemctl list-units --type=service --state=running --no-le
 def discovered_service_payload(service: DiscoveredService) -> dict:
     extra = dict(service.service_resource.extra_params or {}) if service.service_resource else {}
     bound_rule_ids = [str(item) for item in (extra.get("bound_inspection_item_ids") or []) if item]
+    credential_target = extra.get("service_credential_target") or service_credential_target(service)
     return {
         "id": service.id,
         "resource_id": service.resource_id,
@@ -61,6 +62,9 @@ def discovered_service_payload(service: DiscoveredService) -> dict:
         "meta": service.meta or {},
         "bound_rule_ids": bound_rule_ids,
         "bound_rule_count": len(bound_rule_ids) or service.bound_rule_count,
+        "requires_credentials": bool(extra.get("requires_service_credentials") or credential_target),
+        "credential_target": credential_target,
+        "service_credential_configured": bool(extra.get("service_credential_configured")),
         "is_bound": service.is_bound,
         "last_discovered_at": service.last_discovered_at.isoformat() if service.last_discovered_at else None,
     }
@@ -103,7 +107,6 @@ def parse_docker_services(output: str) -> list[ServiceCandidate]:
         discovery_type = "docker_compose" if compose_project or compose_service else "docker_container"
         identity = f"{compose_project}/{compose_service}/{name}" if discovery_type == "docker_compose" else container_id
         display_name = f"{compose_project}/{compose_service}" if compose_project and compose_service else name
-        labels, rule_count = recommended_rules(display_name, image, port, discovery_type)
         services.append(
             ServiceCandidate(
                 name=display_name,
@@ -117,8 +120,8 @@ def parse_docker_services(output: str) -> list[ServiceCandidate]:
                 compose_service=compose_service,
                 container_id=container_id,
                 container_name=name,
-                labels=labels,
-                meta={"raw_status": status, "ports": ports, "recommended_rule_count": rule_count},
+                labels=[],
+                meta={"raw_status": status, "ports": ports},
             )
         )
     return services
@@ -138,7 +141,6 @@ def parse_systemd_services(output: str) -> list[ServiceCandidate]:
         if not unit.endswith(".service") or unit in ignored_units or unit.startswith(ignored_prefixes):
             continue
         name = unit.removesuffix(".service")
-        labels, rule_count = recommended_rules(name, "", "", "systemd")
         services.append(
             ServiceCandidate(
                 name=name,
@@ -148,8 +150,8 @@ def parse_systemd_services(output: str) -> list[ServiceCandidate]:
                 systemd_unit=unit,
                 process_name=name,
                 command=description,
-                labels=labels,
-                meta={"description": description, "recommended_rule_count": rule_count},
+                labels=[],
+                meta={"description": description},
             )
         )
     return services
@@ -197,24 +199,21 @@ def normalize_keywords(values: list[str]) -> list[str]:
     return [str(value).strip().lower() for value in values if str(value).strip()]
 
 
-def recommended_rules(name: str, image: str, port: str, discovery_type: str) -> tuple[list[str], int]:
-    text = f"{name} {image} {port}".lower()
-    if "mysql" in text or port == "3306":
-        return ["Docker 容器基础巡检规则集", "MySQL 基础巡检规则集", "MySQL 连接数检查", "MySQL 慢 SQL 检查"], 4
-    if "postgres" in text or "pgsql" in text or port == "5432":
-        return ["Docker 容器基础巡检规则集", "PostgreSQL 基础巡检规则集", "PostgreSQL 连接数检查", "PostgreSQL 锁检查"], 4
-    if "redis" in text or port == "6379":
-        return ["Docker 容器基础巡检规则集", "Redis 基础巡检规则集", "Redis 内存检查"], 3
-    if "nginx" in text or port in {"80", "443"}:
-        return ["Docker 容器基础巡检规则集", "Nginx 基础巡检规则集", "Nginx 5xx 日志检查", "Nginx 配置检查"], 4
-    if discovery_type == "docker_compose":
-        return ["Docker Compose 巡检规则集"], 1
-    if discovery_type == "systemd":
-        return ["Systemd 服务巡检规则集"], 1
-    return ["Docker 容器基础巡检规则集"], 1
+def service_credential_target(service: DiscoveredService) -> str:
+    text = f"{service.name} {service.image} {service.port} {service.identity}".lower()
+    if "sqlserver" in text or "mssql" in text or service.port == "1433":
+        return "sqlserver"
+    if "mysql" in text or service.port == "3306":
+        return "mysql"
+    if "postgres" in text or "pgsql" in text or service.port == "5432":
+        return "postgresql"
+    if "redis" in text or service.port == "6379":
+        return "redis"
+    return ""
 
 
 def recommended_rule_ids(db: Session, service: DiscoveredService, resource_type: str) -> list[str]:
+    text = f"{service.name} {service.image} {service.port} {service.identity}".lower()
     ids: list[str]
     if resource_type == "compose":
         ids = ["itm_compose_ps", "itm_compose_logs_error"]
@@ -222,6 +221,17 @@ def recommended_rule_ids(db: Session, service: DiscoveredService, resource_type:
         ids = ["itm_systemd_active", "itm_systemd_logs_error"]
     else:
         ids = ["itm_container_state", "itm_container_stats", "itm_container_inspect_restart"]
+    if "redis" in text or service.port == "6379":
+        ids.extend(["itm_redis_memory", "itm_redis_connections", "itm_redis_slowlog"])
+    if "mysql" in text or service.port == "3306":
+        ids.extend(["itm_mysql_conn_ratio", "itm_mysql_slow_query", "itm_mysql_deadlock"])
+    if "postgres" in text or "pgsql" in text or service.port == "5432":
+        ids.extend(["itm_pg_conn_ratio", "itm_pg_slow_query", "itm_pg_replication_lag"])
+    if "nginx" in text or service.port in {"80", "443"}:
+        ids.append("itm_mid_http_status")
+        if service.port == "443":
+            ids.append("itm_mid_ssl_expiry")
+    ids = list(dict.fromkeys(ids))
     existing = {
         item.id
         for item in db.query(InspectionItem.id)
@@ -274,7 +284,7 @@ def upsert_discovered_services(db: Session, host: Resource, candidates: list[Ser
         service.command = candidate.command
         service.labels = candidate.labels or []
         service.meta = candidate.meta or {}
-        service.bound_rule_count = int((candidate.meta or {}).get("recommended_rule_count") or len(service.labels or []))
+        service.bound_rule_count = 0
         service.is_bound = True
         service.last_discovered_at = now
         service.updated_at = now
@@ -292,7 +302,12 @@ def upsert_discovered_services(db: Session, host: Resource, candidates: list[Ser
 def ensure_service_resource(db: Session, host: Resource, service: DiscoveredService) -> Resource:
     resource = db.get(Resource, service.service_resource_id) if service.service_resource_id else None
     resource_type = "compose" if service.discovery_type == "docker_compose" else "systemd" if service.discovery_type == "systemd" else "container"
+    existing_extra = dict(resource.extra_params or {}) if resource else {}
     extra = dict(host.extra_params or {})
+    for key in ("rules_manually_configured", "bound_inspection_item_ids", "service_credential_configured", "service_credential_encrypted"):
+        if key in existing_extra:
+            extra[key] = existing_extra[key]
+    credential_target = service_credential_target(service)
     extra.update(
         {
             "parent_resource_id": host.id,
@@ -303,10 +318,12 @@ def ensure_service_resource(db: Session, host: Resource, service: DiscoveredServ
             "compose_service": service.compose_service,
             "systemd_unit": service.systemd_unit,
             "image": service.image,
-            "recommended_rule_sets": service.labels or [],
+            "requires_service_credentials": bool(credential_target),
+            "service_credential_target": credential_target,
         }
     )
-    extra.setdefault("bound_inspection_item_ids", recommended_rule_ids(db, service, resource_type))
+    if not extra.get("rules_manually_configured"):
+        extra["bound_inspection_item_ids"] = recommended_rule_ids(db, service, resource_type)
     if not resource:
         resource = Resource(
             name=service.name,

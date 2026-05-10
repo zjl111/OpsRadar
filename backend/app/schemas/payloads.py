@@ -108,6 +108,11 @@ class ServiceDiscoveryRequest(BaseModel):
     exclude_keywords: list[str] = Field(default_factory=list)
 
 
+class ServiceCredentialPayload(BaseModel):
+    username: str = Field(default="", max_length=128)
+    credential_secret: str = Field(min_length=1, max_length=20000)
+
+
 class UserUpdate(BaseModel):
     display_name: str = Field(min_length=2, max_length=128)
     email: str = Field(min_length=5, max_length=255)
