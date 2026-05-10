@@ -40,6 +40,8 @@ assets_dir = settings.project_root / "assets"
 if assets_dir.exists():
     app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
+index_file = settings.project_root / "backend" / "app" / "static" / "index.html"
+
 
 @app.on_event("startup")
 def on_startup() -> None:
@@ -48,7 +50,7 @@ def on_startup() -> None:
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(settings.project_root / "index.html")
+    return FileResponse(index_file)
 
 
 @app.get("/{path:path}")
@@ -56,4 +58,4 @@ def spa_fallback(path: str) -> FileResponse:
     candidate = settings.project_root / path
     if candidate.exists() and candidate.is_file():
         return FileResponse(candidate)
-    return FileResponse(settings.project_root / "index.html")
+    return FileResponse(index_file)

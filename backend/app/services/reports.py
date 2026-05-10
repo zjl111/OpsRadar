@@ -11,7 +11,9 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
-from backend.app.models import ResourceGroup, Task, TaskResult
+from backend.app.models import Issue, IssueInsight, Task, TaskResult
+from backend.app.services.analysis import environment_overview
+from backend.app.services.serializers import model_to_dict
 
 
 env = Environment(
@@ -20,19 +22,25 @@ env = Environment(
 )
 
 
-def _task_bundle(db: Session, task_ids: list[str]) -> tuple[list[dict], list[dict], dict, list[str], list[ResourceGroup]]:
+def _task_bundle(db: Session, task_ids: list[str]) -> tuple[list[dict], list[dict], dict]:
     tasks = db.query(Task).filter(Task.id.in_(task_ids)).order_by(Task.created_at.desc()).all()
     if not tasks:
         raise HTTPException(status_code=404, detail="No tasks found for report export")
 
     task_dicts: list[dict] = []
     all_results: list[dict] = []
-    group_ids = {task.group_id for task in tasks if task.group_id}
-    clusters = db.query(ResourceGroup).filter(ResourceGroup.id.in_(group_ids)).all() if group_ids else []
-    groups = [group.name for group in clusters]
     summary = {"total": 0, "success": 0, "fail": 0, "exception": 0}
 
     for task in tasks:
+        environment_data = None
+        if task.environment:
+            environment_data = {
+                "id": task.environment.id,
+                "name": task.environment.name,
+                "env_type": task.environment.env_type,
+                "application_name": task.application.name if task.application else "",
+                "overview": environment_overview(db, task.environment),
+            }
         results = db.query(TaskResult).filter(TaskResult.task_id == task.id).order_by(TaskResult.id).all()
         result_dicts = []
         for result in results:
@@ -55,43 +63,59 @@ def _task_bundle(db: Session, task_ids: list[str]) -> tuple[list[dict], list[dic
             {
                 "id": task.id,
                 "name": task.name,
-                "task_type": task.task_type,
                 "status": task.status,
                 "started_at": task.started_at,
                 "finished_at": task.finished_at,
+                "application_name": task.application.name if task.application else (task.config or {}).get("application_name", ""),
+                "environment_name": task.environment.name if task.environment else (task.config or {}).get("environment_name", ""),
+                "environment": environment_data,
                 "results": result_dicts,
             }
         )
 
-    issues = [
-        {**result, "severity": "High" if result["status"] == "exception" else "Medium"}
-        for result in all_results
-        if result["status"] in {"fail", "exception"}
-    ]
-    return task_dicts, issues, summary, groups, clusters
+    issues = []
+    for result in all_results:
+        if result["status"] not in {"fail", "exception"}:
+            continue
+        issue = db.query(Issue).filter(Issue.task_result_id == result["id"]).order_by(Issue.created_at.desc()).first()
+        insight = db.query(IssueInsight).filter(IssueInsight.issue_id == issue.id).one_or_none() if issue else None
+        issues.append(
+            {
+                **result,
+                "issue": model_to_dict(issue) if issue else None,
+                "insight": model_to_dict(insight) if insight else None,
+                "severity": (issue.severity if issue else ("High" if result["status"] == "exception" else "Medium")),
+            }
+        )
+    return task_dicts, issues, summary
 
 
 def render_report_html(db: Session, task_ids: list[str]) -> str:
-    tasks, issues, summary, groups, clusters = _task_bundle(db, task_ids)
+    tasks, issues, summary = _task_bundle(db, task_ids)
+    first_env = next((task.get("environment") for task in tasks if task.get("environment")), None)
+    report_title = (
+        f"{first_env['application_name']} / {first_env['name']} 巡检报告"
+        if first_env and len(task_ids) == 1
+        else "OpsRadar Merged Inspection Report" if len(task_ids) > 1 else "OpsRadar Inspection Report"
+    )
     template = env.get_template("report.html")
     return template.render(
-        title="OpsRadar Inspection Report" if len(task_ids) == 1 else "OpsRadar Merged Inspection Report",
+        title=report_title,
         company_name="Operations Center",
-        environment="Production",
+        environment=f"{first_env['application_name']} / {first_env['name']}" if first_env else "Production",
         generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         summary=summary,
         tasks=tasks,
         issues=issues,
-        resource_groups=groups,
-        clusters=clusters,
     )
 
 
 def build_docx_report(db: Session, task_ids: list[str], output_path: Path) -> Path:
-    tasks, issues, summary, groups, _ = _task_bundle(db, task_ids)
+    tasks, issues, summary = _task_bundle(db, task_ids)
     doc = Document()
-    doc.add_heading("OpsRadar Inspection Report", 0)
-    doc.add_paragraph(f"Resource Groups: {', '.join(groups) if groups else 'Ungrouped Resources'}")
+    first_env = next((task.get("environment") for task in tasks if task.get("environment")), None)
+    doc.add_heading(f"{first_env['application_name']} / {first_env['name']} Inspection Report" if first_env else "OpsRadar Inspection Report", 0)
+    doc.add_paragraph(f"Application Environment: {first_env['application_name']} / {first_env['name']}" if first_env else "Application Environment: Not specified")
     doc.add_paragraph(f"Generated at: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     doc.add_heading("Summary", level=1)
     summary_table = doc.add_table(rows=2, cols=4)
@@ -103,7 +127,9 @@ def build_docx_report(db: Session, task_ids: list[str], output_path: Path) -> Pa
 
     for task in tasks:
         doc.add_heading(task["name"], level=1)
-        doc.add_paragraph(f"Task ID: {task['id']} | Type: {task['task_type']} | Status: {task['status']}")
+        doc.add_paragraph(f"Task ID: {task['id']} | Status: {task['status']}")
+        if task.get("environment_name"):
+            doc.add_paragraph(f"Application Environment: {task.get('application_name', '')} / {task.get('environment_name', '')}")
         table = doc.add_table(rows=1, cols=7)
         table.style = "Table Grid"
         headers = ["Resource", "Type", "Address", "Check Item", "Command", "Status", "Cost"]
@@ -131,7 +157,8 @@ def build_docx_report(db: Session, task_ids: list[str], output_path: Path) -> Pa
             row[1].text = issue["task_id"]
             row[2].text = str(issue["resource_snapshot"].get("name", ""))
             row[3].text = issue["output"] or issue["error_message"]
-            row[4].text = "Review resource status, validate threshold, and track remediation in OpsRadar Issues."
+            insight = issue.get("insight") or {}
+            row[4].text = insight.get("recommendation") or "Review resource status, validate threshold, and track remediation in OpsRadar Issues."
     else:
         doc.add_paragraph("No issues found.")
 

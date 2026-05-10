@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import os
+
 from sqlalchemy.orm import Session
 
 from backend.app.models import (
+    AnalysisRule,
+    AppEnvironment,
+    Application,
     InspectionItem,
+    Resource,
     ResourceType,
     Role,
     SiteSetting,
-    TaskType,
 )
 
 
@@ -16,41 +21,72 @@ def seed_builtin_data(db: Session) -> None:
         db.add(SiteSetting())
         db.commit()
 
-    if db.query(ResourceType).count() == 0:
-        db.add_all(
-            [
-                ResourceType(key="host", name="Linux / Unix 主机", default_port=22, description="SSH shell inspection target"),
-                ResourceType(key="mysql", name="MySQL 数据库", default_port=3306, description="MySQL SQL inspection target"),
-                ResourceType(key="pgsql", name="PostgreSQL 数据库", default_port=5432, description="PostgreSQL SQL inspection target"),
-                ResourceType(key="redis", name="Redis 缓存", default_port=6379, description="Redis command inspection target"),
-                ResourceType(key="middleware", name="中间件", default_port=8848, description="Nacos, MQ and other middleware instances"),
-            ]
-        )
-        db.commit()
-
-    if db.query(TaskType).count() == 0:
-        db.add_all(
-            [
-                TaskType(key="daily", name="日常巡检", description="日常例行健康检查与可用性巡检"),
-                TaskType(key="periodic", name="周期巡检", description="按计划周期执行的资源与模板巡检"),
-                TaskType(key="compliance", name="合规检查", description="安全基线、等保和审计合规检查"),
-            ]
-        )
-        db.commit()
+    default_resource_types = [
+        ("host", "Linux / Unix 主机", 22, "SSH shell inspection target"),
+        ("mysql", "MySQL 数据库", 3306, "MySQL SQL inspection target"),
+        ("pgsql", "PostgreSQL 数据库", 5432, "PostgreSQL SQL inspection target"),
+        ("redis", "Redis 缓存", 6379, "Redis command inspection target"),
+        ("middleware", "中间件", 8848, "Nacos, MQ and other middleware instances"),
+        ("container", "Docker 容器服务", 22, "Run docker stats and docker inspect over SSH"),
+        ("compose", "Docker Compose 服务", 22, "Run docker compose ps, stats and inspect over SSH"),
+        ("systemd", "Systemd 服务", 22, "Run systemctl and journalctl checks over SSH"),
+    ]
+    for key, name, default_port, description in default_resource_types:
+        resource_type = db.query(ResourceType).filter(ResourceType.key == key).one_or_none()
+        if not resource_type:
+            db.add(ResourceType(key=key, name=name, default_port=default_port, description=description))
+        else:
+            resource_type.name = name
+            resource_type.default_port = default_port
+            resource_type.description = description
+            resource_type.enabled = True
+    db.commit()
 
     default_roles = {
-        "admin": ("Full platform administration", ["*"]),
+        "admin": ("系统管理员：拥有平台全部管理权限。", ["*"]),
         "operator": (
-            "Operate resources, tasks, reports and issues",
+            "操作员：负责资源、巡检、报告和问题处理。",
             [
                 "dashboard:read",
+                "applications:*",
+                "environments:*",
                 "resources:*",
-                "resource_groups:*",
                 "templates:read",
                 "tasks:*",
                 "reports:*",
                 "issues:*",
                 "audit:read",
+                "analysis_rules:read",
+                "resource_center:read",
+                "smart_inspection:read",
+                "problem_center:read",
+                "report_center:read",
+                "ai_center:read",
+                "ai_models:read",
+                "ai_datasources:read",
+                "ai_diagnostics:read",
+                "ai_analysis:read",
+                "ai_knowledge:read",
+                "ai_assistant:read",
+            ],
+        ),
+        "user": (
+            "用户：只读查看概览、资源、巡检、问题、报告和 AI 助手。",
+            [
+                "dashboard:read",
+                "resource_center:read",
+                "resources:read",
+                "applications:read",
+                "environments:read",
+                "smart_inspection:read",
+                "templates:read",
+                "tasks:read",
+                "problem_center:read",
+                "issues:read",
+                "report_center:read",
+                "reports:read",
+                "ai_center:read",
+                "ai_assistant:read",
             ],
         ),
     }
@@ -58,9 +94,158 @@ def seed_builtin_data(db: Session) -> None:
         role = db.query(Role).filter(Role.name == name).one_or_none()
         if not role:
             db.add(Role(name=name, description=description, permissions=permissions))
-        elif name == "operator":
+        elif name in {"operator", "user"}:
             merged = sorted(set(role.permissions or []) | set(permissions))
             role.permissions = merged
+            role.description = description
+    db.commit()
+
+    if os.getenv("OPSRADAR_SEED_SAMPLE_ENVIRONMENTS", "").lower() in {"1", "true", "yes"}:
+        application_templates = [
+            (
+                "app_jumpserver",
+                "JumpServer",
+                "SRE",
+                "JumpServer 堡垒机应用模板，覆盖 Core、Koko、Lion、Celery、Redis、PostgreSQL、Nginx 等运行环境。",
+                ["bastion", "security", "ops"],
+                [
+                    ("env_jumpserver_prod", "生产环境", "prod", "JumpServer 生产运行环境"),
+                    ("env_jumpserver_staging", "预发环境", "staging", "JumpServer 预发验证环境"),
+                ],
+            ),
+            (
+                "app_itdevops",
+                "ITDevOps",
+                "SRE",
+                "ITDevOps 应用模板，覆盖 Web、API、Worker、Scheduler、数据库、中间件与网关资源。",
+                ["devops", "platform", "ops"],
+                [
+                    ("env_itdevops_prod", "生产环境", "prod", "ITDevOps 生产运行环境"),
+                    ("env_itdevops_staging", "预发环境", "staging", "ITDevOps 预发验证环境"),
+                ],
+            ),
+        ]
+        for app_id, name, owner, description, tags, environments in application_templates:
+            app = db.get(Application, app_id) or db.query(Application).filter(Application.name == name).one_or_none()
+            if not app:
+                app = Application(id=app_id, name=name)
+                db.add(app)
+            app_id = app.id
+            app.owner = owner
+            app.description = description
+            app.status = "active"
+            app.tags = tags
+            for env_id, env_name, env_type, env_desc in environments:
+                env = db.get(AppEnvironment, env_id) or (
+                    db.query(AppEnvironment)
+                    .filter(AppEnvironment.application_id == app_id, AppEnvironment.name == env_name, AppEnvironment.env_type == env_type)
+                    .one_or_none()
+                )
+                if not env:
+                    env = AppEnvironment(id=env_id, application_id=app_id, name=env_name)
+                    db.add(env)
+                env.application_id = app_id
+                env.name = env_name
+                env.env_type = env_type
+                env.owner = owner
+                env.description = env_desc
+                env.status = "active"
+        db.commit()
+
+    analysis_rules = [
+        (
+            "arl_ssh_auth",
+            "SSH 认证失败",
+            "os",
+            "host",
+            "ssh",
+            "exception",
+            "authentication failed",
+            "资源账号、密码或私钥不可用，或目标主机 SSH 认证策略已变更。",
+            "会导致该主机上的 OS、安全基线和容器服务巡检无法执行，影响环境健康判断。",
+            "确认资源账号、密码/私钥、sudo 权限和 sshd 配置，必要时重新录入凭据。",
+            ["在资源列表点击测试确认 SSH 连通性。", "检查账号是否被锁定或过期。", "确认私钥格式、权限和目标主机 authorized_keys。"],
+            "资源测试成功后重新启动巡检任务。",
+            "high",
+        ),
+        (
+            "arl_redis_memory",
+            "Redis 内存压力",
+            "middleware",
+            "redis",
+            "内存",
+            "fail",
+            "memory",
+            "Redis 内存使用率或峰值过高，可能存在 big key、过期策略不合理或容量不足。",
+            "可能影响 Celery 队列、缓存读写和业务登录/任务调度稳定性。",
+            "排查 big key、淘汰策略、maxmemory 设置和业务热点 key，必要时扩容或拆分实例。",
+            ["执行 redis-cli --bigkeys 或采样分析 keyspace。", "检查 maxmemory-policy 与内存碎片率。", "观察 connected_clients、blocked_clients 和 slowlog。"],
+            "Redis 内存占比下降且 slowlog/blocked_clients 恢复正常。",
+            "high",
+        ),
+        (
+            "arl_pg_connections",
+            "PostgreSQL 连接数高",
+            "db",
+            "postgresql",
+            "连接",
+            "fail",
+            "connection",
+            "数据库连接数占比过高，可能是连接池配置不合理、慢查询堆积或连接泄漏。",
+            "可能导致 API、Worker 或登录链路连接数据库失败。",
+            "检查 pg_stat_activity、连接池上限、慢查询和长事务，必要时调整连接池或释放异常会话。",
+            ["查询 pg_stat_activity 中活跃连接和长事务。", "检查应用连接池配置。", "确认是否存在慢 SQL 或锁等待。"],
+            "连接数回落到阈值内，核心接口访问正常。",
+            "high",
+        ),
+        (
+            "arl_nginx_5xx",
+            "网关 5xx 或 upstream 异常",
+            "gateway",
+            "nginx",
+            "HTTP",
+            "fail",
+            "5",
+            "Nginx/upstream 可能无法连接后端服务，或后端服务返回异常。",
+            "可能影响用户登录、页面访问、API 调用和健康检查结果。",
+            "检查 Nginx error log、upstream 状态、后端服务端口和最近发布变更。",
+            ["查看 Nginx error.log 中 upstream 错误。", "确认后端服务端口监听和进程状态。", "检查负载均衡健康检查配置。"],
+            "HTTP 状态码恢复 2xx/3xx，5xx 错误不再增长。",
+            "high",
+        ),
+        (
+            "arl_service_port",
+            "容器服务端口未监听",
+            "service",
+            "service",
+            "端口",
+            "fail",
+            "listen",
+            "容器服务可能未启动、容器退出、端口变更或绑定地址异常。",
+            "对应业务服务不可用，可能影响完整业务链路。",
+            "检查 systemd/container 状态、服务日志、端口监听和配置变更。",
+            ["执行 systemctl status 或 docker ps 检查服务状态。", "查看最近 200 行服务日志。", "确认端口、配置文件和依赖服务可用。"],
+            "服务进程恢复正常，端口监听且健康接口返回成功。",
+            "medium",
+        ),
+    ]
+    for rule_id, name, layer, role, item_keyword, status, error_keyword, cause, impact, recommendation, steps, verification, risk in analysis_rules:
+        rule = db.get(AnalysisRule, rule_id)
+        if not rule:
+            rule = AnalysisRule(id=rule_id, name=name)
+            db.add(rule)
+        rule.layer = layer
+        rule.role = role
+        rule.item_keyword = item_keyword
+        rule.status = status
+        rule.error_keyword = error_keyword
+        rule.probable_cause = cause
+        rule.impact = impact
+        rule.recommendation = recommendation
+        rule.steps = steps
+        rule.verification = verification
+        rule.risk_level = risk
+        rule.enabled = True
     db.commit()
 
     builtin_items = [
@@ -99,6 +284,16 @@ def seed_builtin_data(db: Session) -> None:
         ("itm_os_inactive_accounts", "不活跃账号", "os", "host", "shell", "lastlog | awk 'NR>1 && /Never logged in/ {print $1}' | head -100", "review", "合规检查：识别从未登录或长期不活跃账号。"),
         ("itm_os_failed_login_lock", "登录失败锁定", "os", "host", "shell", "grep -R 'pam_faillock\\|pam_tally2\\|deny=' /etc/pam.d /etc/security/faillock.conf 2>/dev/null", "configured", "CIS 基线：检查连续登录失败锁定策略。"),
         ("itm_os_session_timeout", "会话超时", "os", "host", "shell", "grep -R 'TMOUT' /etc/profile /etc/profile.d 2>/dev/null", "configured", "CIS 基线：检查空闲会话自动退出策略。"),
+        ("itm_os_process_count", "进程数量", "os", "host", "shell", "ps -e --no-headers | wc -l", "<threshold", "基础巡检：检查进程数量异常增长。"),
+        ("itm_os_top_processes", "资源热点进程", "os", "host", "shell", "ps -eo pid,ppid,comm,%cpu,%mem --sort=-%cpu | head -20", "review", "基础巡检：定位 CPU 与内存占用较高的进程。"),
+        ("itm_os_file_descriptor", "文件句柄使用率", "os", "host", "shell", "cat /proc/sys/fs/file-nr; ulimit -n", "<80", "基础巡检：检查系统文件句柄与进程打开文件风险。"),
+        ("itm_os_zombie_process", "僵尸进程", "os", "host", "shell", "ps -eo stat,pid,ppid,comm | awk '$1 ~ /Z/ {print}'", "empty", "基础巡检：检查僵尸进程和父进程异常。"),
+        ("itm_os_tcp_states", "TCP 连接状态", "os", "host", "shell", "ss -ant | awk 'NR>1 {state[$1]++} END {for (s in state) print s,state[s]}'", "review", "基础巡检：统计 TIME_WAIT、CLOSE_WAIT 等 TCP 状态。"),
+        ("itm_os_conntrack_usage", "Conntrack 使用率", "os", "host", "shell", "cat /proc/sys/net/netfilter/nf_conntrack_count /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || true", "<80", "基础巡检：检查连接跟踪表容量。"),
+        ("itm_os_network_errors", "网卡错误包", "os", "host", "shell", "ip -s link", "errors<limit", "基础巡检：检查网卡丢包、错误包和队列异常。"),
+        ("itm_os_dns_resolution", "DNS 解析", "os", "host", "shell", "getent hosts example.com; resolvectl status 2>/dev/null || cat /etc/resolv.conf", "resolved", "基础巡检：检查 DNS 解析和 resolver 配置。"),
+        ("itm_os_kernel_messages", "内核异常日志", "os", "host", "shell", "dmesg -T 2>/dev/null | grep -Ei 'error|fail|oom|blocked|segfault' | tail -100 || true", "empty", "基础巡检：扫描内核异常、OOM 和 blocked task 日志。"),
+        ("itm_os_sysctl_baseline", "sysctl 基线", "os", "host", "shell", "sysctl -a 2>/dev/null | grep -E 'tcp_syncookies|ip_forward|accept_redirects|rp_filter|somaxconn'", "hardened", "安全基线：合并系统内核参数检查。"),
         ("itm_pg_conn_ratio", "连接数占比", "postgresql", "pgsql", "sql", "select count(*)::float / setting::float * 100 as used_percent from pg_stat_activity, pg_settings where name='max_connections';", "<80", "基础巡检：检查 PostgreSQL 连接数占比。"),
         ("itm_pg_slow_query", "慢查询", "postgresql", "pgsql", "sql", "select count(*) from pg_stat_activity where state <> 'idle' and now() - query_start > interval '30 seconds';", "<10", "基础巡检：检查 PostgreSQL 慢 SQL 或长事务。"),
         ("itm_pg_replication_lag", "主从同步延迟", "postgresql", "pgsql", "sql", "select coalesce(max(extract(epoch from now() - pg_last_xact_replay_timestamp())),0) as lag_seconds;", "<60", "基础巡检：检查 PostgreSQL 复制延迟。"),
@@ -128,6 +323,13 @@ def seed_builtin_data(db: Session) -> None:
         ("itm_redis_danger_commands", "危险命令重命名", "redis", "redis", "shell", "redis-cli -h {ip} config get rename-command", "configured", "合规检查：检查 FLUSHALL、CONFIG 等危险命令限制。"),
         ("itm_redis_persistence", "持久化策略", "redis", "redis", "shell", "redis-cli -h {ip} config get appendonly; redis-cli -h {ip} config get save", "configured", "合规检查：检查 Redis 持久化与恢复策略。"),
         ("itm_container_docker_alive", "Docker 存活", "container", "host", "shell", "systemctl is-active docker 2>/dev/null || docker info", "active", "基础巡检：检查 Docker 服务存活。"),
+        ("itm_container_state", "容器运行状态", "container", "container", "shell", "docker inspect --format '{{.Name}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' {container_name}", "running", "基础巡检：检查指定容器运行状态和健康检查状态。"),
+        ("itm_container_stats", "容器资源使用率", "container", "container", "shell", "docker stats --no-stream --format '{{.Name}} {{.CPUPerc}} {{.MemUsage}} {{.NetIO}} {{.BlockIO}}' {container_name}", "regex:.+", "基础巡检：采集指定容器 CPU、内存、网络和块 IO 使用情况。"),
+        ("itm_container_inspect_restart", "容器重启次数", "container", "container", "shell", "docker inspect --format '{{.Name}} {{.RestartCount}}' {container_name}", "<5", "基础巡检：检查容器重启次数。"),
+        ("itm_compose_ps", "Compose 服务状态", "container", "compose", "shell", "docker compose -p {compose_project} ps {compose_service}", "running", "基础巡检：检查 Docker Compose 指定服务状态。"),
+        ("itm_compose_logs_error", "Compose 服务错误日志", "container", "compose", "shell", "docker compose -p {compose_project} logs --tail=200 {compose_service} | grep -Ei 'error|exception|panic|fatal' || true", "empty", "基础巡检：扫描 Docker Compose 服务最近日志中的错误关键字。"),
+        ("itm_systemd_active", "Systemd 服务状态", "container", "systemd", "shell", "systemctl is-active {systemd_unit}", "active", "基础巡检：检查指定 Systemd 服务是否处于 active。"),
+        ("itm_systemd_logs_error", "Systemd 服务错误日志", "container", "systemd", "shell", "journalctl -u {systemd_unit} --since '1 hour ago' --no-pager 2>/dev/null | grep -Ei 'error|exception|panic|fatal|failed' || true", "empty", "基础巡检：扫描指定 Systemd 服务最近日志中的错误关键字。"),
         ("itm_container_k8s_alive", "K8s 存活", "container", "host", "shell", "kubectl get nodes 2>/dev/null || crictl info 2>/dev/null", "ready", "基础巡检：检查 Kubernetes/容器运行时状态。"),
         ("itm_container_privileged", "特权容器", "container", "host", "shell", "docker ps -q | xargs -r docker inspect --format '{{.Name}} {{.HostConfig.Privileged}}' 2>/dev/null", "false", "CIS Docker：检查 privileged 容器。"),
         ("itm_container_image_risk", "镜像漏洞与来源", "container", "host", "shell", "docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null", "review", "CIS Docker：检查镜像来源、版本和漏洞扫描状态。"),
@@ -175,3 +377,31 @@ def seed_builtin_data(db: Session) -> None:
         else:
             db.add(InspectionItem(id=item_id, **values))
     db.commit()
+    backfill_resource_rule_bindings(db)
+
+
+def backfill_resource_rule_bindings(db: Session) -> None:
+    defaults = {
+        "host": ["itm_os_cpu", "itm_os_memory", "itm_os_disk_inode", "itm_os_load", "itm_os_time_sync"],
+        "linux": ["itm_os_cpu", "itm_os_memory", "itm_os_disk_inode", "itm_os_load", "itm_os_time_sync"],
+        "server": ["itm_os_cpu", "itm_os_memory", "itm_os_disk_inode", "itm_os_load", "itm_os_time_sync"],
+        "container": ["itm_container_state", "itm_container_stats", "itm_container_inspect_restart"],
+        "compose": ["itm_compose_ps", "itm_compose_logs_error"],
+        "systemd": ["itm_systemd_active", "itm_systemd_logs_error"],
+        "pgsql": ["itm_pg_conn_ratio", "itm_pg_slow_query", "itm_pg_replication_lag"],
+        "mysql": ["itm_mysql_conn_ratio", "itm_mysql_slow_query", "itm_mysql_deadlock"],
+        "redis": ["itm_redis_memory", "itm_redis_connections", "itm_redis_slowlog"],
+        "middleware": ["itm_mid_http_status", "itm_mid_ssl_expiry"],
+    }
+    all_ids = {item.id for item in db.query(InspectionItem.id).filter(InspectionItem.enabled.is_(True)).all()}
+    changed = False
+    for resource in db.query(Resource).all():
+        extra = dict(resource.extra_params or {})
+        if extra.get("rules_manually_configured") and "bound_inspection_item_ids" in extra:
+            continue
+        ids = [item_id for item_id in defaults.get(resource.type, []) if item_id in all_ids]
+        extra["bound_inspection_item_ids"] = ids
+        resource.extra_params = extra
+        changed = True
+    if changed:
+        db.commit()

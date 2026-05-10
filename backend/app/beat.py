@@ -26,11 +26,10 @@ def scan_once() -> int:
             task = create_manual_task(
                 db,
                 name=f"{plan.name} {now.strftime('%Y-%m-%d %H:%M')}",
-                task_type=plan.task_type or "periodic",
                 resource_ids=list(plan.resource_ids or []),
                 item_ids=list(plan.item_ids or []),
                 user_id=plan.created_by,
-                group_id=plan.group_id,
+                environment_id=plan.environment_id,
                 config={"source": "cron_plan", "cron_plan_id": plan.id, **dict(plan.notification_config or {})},
             )
             try:

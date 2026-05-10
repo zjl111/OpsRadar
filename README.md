@@ -130,4 +130,6 @@ smoke ok
 
 ## Architecture
 
-See [docs/deployment/architecture.md](/Users/zhangjinli/Documents/project-code/OpsRadar/docs/deployment/architecture.md).
+See [docs/deployment/architecture.md](docs/deployment/architecture.md).
+
+For the full delivery-level technical design, see [docs/TECHNICAL_DESIGN.md](docs/TECHNICAL_DESIGN.md).

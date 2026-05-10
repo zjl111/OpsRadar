@@ -33,6 +33,11 @@
     .cluster-card { border:1px solid #ddd; border-radius:4px; padding:14px; margin:0 0 14px; background:#fafafa; }
     .cluster-title { font-size:16px; font-weight:bold; margin:0 0 6px; }
     .cluster-meta { color:#666; margin:0 0 10px; }
+    .env-health { display:flex; gap:12px; flex-wrap:wrap; margin:0 0 18px; }
+    .env-health-card { border:1px solid #ddd; border-radius:4px; padding:12px; background:#fafafa; min-width:160px; }
+    .env-health-card strong { display:block; font-size:24px; color:#263746; margin-bottom:4px; }
+    .insight-box { text-align:left; line-height:18px; }
+    .insight-box strong { color:#263746; }
     .mono { font-family:Menlo,Monaco,Consolas,monospace; font-size:12px; }
     .task-break { page-break-before:always; border-top:3px solid #263746; padding-top:18px; margin-top:22px; }
     @media print { body { background:#fff; } #report { width:100%; box-shadow:none; margin:0; } }
@@ -68,7 +73,7 @@
     <div class="table-wrapper details">
       <table><tbody>
         <tr><td style="width:20%;">Company name:</td><td>{{ company_name }}</td></tr>
-        <tr><td>Resource Group:</td><td>{{ resource_groups | join(" / ") if resource_groups else "Ungrouped Resources" }}</td></tr>
+        <tr><td>Application Environment:</td><td>{{ environment }}</td></tr>
         <tr><td>Environment:</td><td>{{ environment }}</td></tr>
         <tr><td>Task count:</td><td>{{ tasks | length }}</td></tr>
         <tr><td>Results:</td><td>{{ summary.total }} checks / {{ summary.success }} success / {{ summary.fail }} failed / {{ summary.exception }} exception</td></tr>
@@ -90,12 +95,22 @@
       <div class="table-wrapper details">
         <table><tbody>
           <tr><td style="width:20%;">Task ID:</td><td class="mono">{{ task.id }}</td></tr>
-          <tr><td>Type:</td><td>{{ task.task_type }}</td></tr>
           <tr><td>Status:</td><td>{{ task.status }}</td></tr>
+          <tr><td>Application Environment:</td><td>{{ task.application_name or "-" }} / {{ task.environment_name or "-" }}</td></tr>
           <tr><td>Started:</td><td>{{ task.started_at }}</td></tr>
           <tr><td>Finished:</td><td>{{ task.finished_at }}</td></tr>
         </tbody></table>
       </div>
+      {% if task.environment and task.environment.overview %}
+      <div class="details-header">Environment Health</div>
+      <div class="env-health">
+        <div class="env-health-card"><strong>{{ task.environment.overview.health_score if task.environment.overview.health_score is not none else "-" }}</strong>Health Score</div>
+        <div class="env-health-card"><strong>{{ task.environment.overview.status }}</strong>Status</div>
+        {% for layer in task.environment.overview.layers %}
+        <div class="env-health-card"><strong>{{ layer.score }}%</strong>{{ layer.layer }} / {{ layer.status }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
       <div class="details-header">Host / Resource Information</div>
       <div class="table-wrapper details">
         <table>
@@ -121,7 +136,7 @@
     <div class="table-wrapper details">
       <table>
         <tbody>
-          <tr class="plugin-row-header"><th>Severity</th><th>Task</th><th>Node</th><th>Category</th><th>Message</th><th>Recommendation</th></tr>
+          <tr class="plugin-row-header"><th>Severity</th><th>Task</th><th>Node</th><th>Category</th><th>Message</th><th>Analysis & Recommendation</th></tr>
           {% if issues %}
           {% for issue in issues %}
           <tr class="plugin-row">
@@ -130,7 +145,16 @@
             <td>{{ issue.resource_snapshot.name }}<br><span class="mono">{{ issue.resource_snapshot.ip }}:{{ issue.resource_snapshot.port }}</span></td>
             <td>{{ issue.item_snapshot.category }}</td>
             <td>{{ issue.output or issue.error_message }}</td>
-            <td>Review resource status, validate threshold, and track remediation in OpsRadar Issues.</td>
+            <td class="insight-box">
+              {% if issue.insight %}
+              <strong>Cause:</strong> {{ issue.insight.probable_cause }}<br>
+              <strong>Impact:</strong> {{ issue.insight.impact }}<br>
+              <strong>Action:</strong> {{ issue.insight.recommendation }}<br>
+              <strong>Verify:</strong> {{ issue.insight.verification }}
+              {% else %}
+              Review resource status, validate threshold, and track remediation in OpsRadar Issues.
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
           {% else %}

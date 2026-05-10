@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from backend.app.db.session import Base
@@ -53,26 +53,59 @@ class SiteSetting(Base):
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
-class ResourceGroup(Base):
-    __tablename__ = "resource_groups"
+class Application(Base):
+    __tablename__ = "applications"
 
-    id = Column(String(40), primary_key=True, default=lambda: new_id("grp"))
-    name = Column(String(128), nullable=False)
-    owner = Column(String(128), nullable=False)
+    id = Column(String(40), primary_key=True, default=lambda: new_id("app"))
+    name = Column(String(128), unique=True, nullable=False, index=True)
+    owner = Column(String(128), default="SRE", nullable=False)
     description = Column(Text, default="")
     status = Column(String(24), default="active", nullable=False)
     tags = Column(JSON, default=list, nullable=False)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
-    resources = relationship("Resource", back_populates="group")
-    tasks = relationship("Task", back_populates="group")
+    environments = relationship("AppEnvironment", back_populates="application", cascade="all, delete-orphan")
+
+
+class AppEnvironment(Base):
+    __tablename__ = "app_environments"
+    __table_args__ = (UniqueConstraint("application_id", "name", "env_type", name="ux_app_environments_app_name_type"),)
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("env"))
+    application_id = Column(String(40), ForeignKey("applications.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    env_type = Column(String(32), default="prod", nullable=False)
+    owner = Column(String(128), default="SRE", nullable=False)
+    description = Column(Text, default="")
+    status = Column(String(24), default="active", nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    application = relationship("Application", back_populates="environments")
+    resources = relationship("EnvironmentResource", back_populates="environment", cascade="all, delete-orphan")
+
+
+class EnvironmentResource(Base):
+    __tablename__ = "environment_resources"
+    __table_args__ = (UniqueConstraint("environment_id", "resource_id", name="ux_environment_resources_env_resource"),)
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("ebr"))
+    environment_id = Column(String(40), ForeignKey("app_environments.id", ondelete="CASCADE"), nullable=False, index=True)
+    resource_id = Column(String(40), ForeignKey("resources.id", ondelete="CASCADE"), nullable=False, index=True)
+    layer = Column(String(32), default="os", nullable=False)
+    role = Column(String(64), default="host", nullable=False)
+    weight = Column(Integer, default=10, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    environment = relationship("AppEnvironment", back_populates="resources")
+    resource = relationship("Resource", back_populates="environment_bindings")
 
 
 class Resource(Base):
     __tablename__ = "resources"
 
     id = Column(String(40), primary_key=True, default=lambda: new_id("res"))
-    group_id = Column(String(40), ForeignKey("resource_groups.id"))
     name = Column(String(128), nullable=False)
     type = Column(String(32), nullable=False)
     ip = Column(String(64), nullable=False)
@@ -89,7 +122,43 @@ class Resource(Base):
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
-    group = relationship("ResourceGroup", back_populates="resources")
+    environment_bindings = relationship("EnvironmentResource", back_populates="resource", cascade="all, delete-orphan")
+
+
+class DiscoveredService(Base):
+    __tablename__ = "discovered_services"
+    __table_args__ = (UniqueConstraint("resource_id", "discovery_type", "identity", name="ux_discovered_services_resource_type_identity"),)
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("dsv"))
+    resource_id = Column(String(40), ForeignKey("resources.id", ondelete="CASCADE"), nullable=False, index=True)
+    service_resource_id = Column(String(40), ForeignKey("resources.id", ondelete="SET NULL"), index=True)
+    environment_id = Column(String(40), ForeignKey("app_environments.id", ondelete="SET NULL"), index=True)
+    name = Column(String(128), nullable=False)
+    discovery_type = Column(String(32), nullable=False, index=True)
+    identity = Column(String(255), nullable=False)
+    status = Column(String(32), default="unknown", nullable=False)
+    ip = Column(String(64), default="", nullable=False)
+    port = Column(String(64), default="", nullable=False)
+    protocol = Column(String(16), default="tcp", nullable=False)
+    image = Column(String(255), default="", nullable=False)
+    compose_project = Column(String(128), default="", nullable=False)
+    compose_service = Column(String(128), default="", nullable=False)
+    container_id = Column(String(128), default="", nullable=False)
+    container_name = Column(String(128), default="", nullable=False)
+    systemd_unit = Column(String(128), default="", nullable=False)
+    process_name = Column(String(128), default="", nullable=False)
+    command = Column(Text, default="", nullable=False)
+    labels = Column(JSON, default=list, nullable=False)
+    meta = Column(JSON, default=dict, nullable=False)
+    bound_rule_count = Column(Integer, default=0, nullable=False)
+    is_bound = Column(Boolean, default=True, nullable=False)
+    last_discovered_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    host_resource = relationship("Resource", foreign_keys=[resource_id])
+    service_resource = relationship("Resource", foreign_keys=[service_resource_id])
+    environment = relationship("AppEnvironment")
 
 
 class ResourceType(Base):
@@ -99,17 +168,6 @@ class ResourceType(Base):
     key = Column(String(32), unique=True, nullable=False, index=True)
     name = Column(String(80), nullable=False)
     default_port = Column(Integer, default=22, nullable=False)
-    enabled = Column(Boolean, default=True, nullable=False)
-    description = Column(Text, default="")
-    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
-
-
-class TaskType(Base):
-    __tablename__ = "task_types"
-
-    id = Column(String(40), primary_key=True, default=lambda: new_id("ttp"))
-    key = Column(String(32), unique=True, nullable=False, index=True)
-    name = Column(String(80), nullable=False)
     enabled = Column(Boolean, default=True, nullable=False)
     description = Column(Text, default="")
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -136,8 +194,7 @@ class CronPlan(Base):
 
     id = Column(String(40), primary_key=True, default=lambda: new_id("crn"))
     name = Column(String(128), nullable=False)
-    task_type = Column(String(32), default="periodic", nullable=False)
-    group_id = Column(String(40))
+    environment_id = Column(String(40), ForeignKey("app_environments.id", ondelete="SET NULL"))
     created_by = Column(String(40))
     description = Column(Text, default="")
     cron_expr = Column(String(64), nullable=False)
@@ -149,15 +206,17 @@ class CronPlan(Base):
     next_run_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
+    environment = relationship("AppEnvironment")
+
 
 class Task(Base):
     __tablename__ = "inspection_tasks"
 
     id = Column(String(40), primary_key=True, default=lambda: new_id("tsk"))
     name = Column(String(255), nullable=False)
-    task_type = Column(String(32), nullable=False)
     status = Column(String(24), default="pending", nullable=False)
-    group_id = Column(String(40), ForeignKey("resource_groups.id"))
+    application_id = Column(String(40), ForeignKey("applications.id", ondelete="SET NULL"))
+    environment_id = Column(String(40), ForeignKey("app_environments.id", ondelete="SET NULL"))
     created_by = Column(String(40), ForeignKey("users.id"))
     summary = Column(JSON, default=dict, nullable=False)
     config = Column(JSON, default=dict, nullable=False)
@@ -167,7 +226,8 @@ class Task(Base):
     finished_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
-    group = relationship("ResourceGroup", back_populates="tasks")
+    application = relationship("Application")
+    environment = relationship("AppEnvironment")
     results = relationship("TaskResult", back_populates="task", cascade="all, delete-orphan")
     logs = relationship("TaskLog", back_populates="task", cascade="all, delete-orphan")
 
@@ -215,6 +275,45 @@ class Issue(Base):
     task = relationship("Task")
 
 
+class AnalysisRule(Base):
+    __tablename__ = "analysis_rules"
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("arl"))
+    name = Column(String(128), nullable=False)
+    layer = Column(String(32), default="", nullable=False)
+    role = Column(String(64), default="", nullable=False)
+    item_keyword = Column(String(128), default="", nullable=False)
+    status = Column(String(24), default="", nullable=False)
+    error_keyword = Column(String(255), default="", nullable=False)
+    probable_cause = Column(Text, default="", nullable=False)
+    impact = Column(Text, default="", nullable=False)
+    recommendation = Column(Text, default="", nullable=False)
+    steps = Column(JSON, default=list, nullable=False)
+    verification = Column(Text, default="", nullable=False)
+    risk_level = Column(String(24), default="medium", nullable=False)
+    enabled = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class IssueInsight(Base):
+    __tablename__ = "issue_insights"
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("ins"))
+    issue_id = Column(String(40), ForeignKey("issues.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    rule_id = Column(String(40), ForeignKey("analysis_rules.id", ondelete="SET NULL"))
+    probable_cause = Column(Text, default="", nullable=False)
+    impact = Column(Text, default="", nullable=False)
+    recommendation = Column(Text, default="", nullable=False)
+    steps = Column(JSON, default=list, nullable=False)
+    verification = Column(Text, default="", nullable=False)
+    risk_level = Column(String(24), default="medium", nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    issue = relationship("Issue")
+    rule = relationship("AnalysisRule")
+
+
 class TaskLog(Base):
     __tablename__ = "task_logs"
 
@@ -248,3 +347,140 @@ class NotificationChannel(Base):
     config = Column(JSON, default=dict, nullable=False)
     enabled = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class AiModelConfig(Base):
+    __tablename__ = "ai_model_configs"
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("aim"))
+    name = Column(String(128), nullable=False)
+    provider = Column(String(48), default="openai_compatible", nullable=False)
+    base_url = Column(Text, default="", nullable=False)
+    model_name = Column(String(128), default="", nullable=False)
+    config = Column(JSON, default=dict, nullable=False)
+    enabled = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class ObservabilityDatasource(Base):
+    __tablename__ = "observability_datasources"
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("ods"))
+    name = Column(String(128), nullable=False)
+    type = Column(String(32), nullable=False)
+    endpoint = Column(Text, default="", nullable=False)
+    tenant = Column(String(128), default="", nullable=False)
+    default_range = Column(String(32), default="1h", nullable=False)
+    label_mapping = Column(JSON, default=dict, nullable=False)
+    config = Column(JSON, default=dict, nullable=False)
+    enabled = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class EnvironmentDatasourceBinding(Base):
+    __tablename__ = "environment_datasource_bindings"
+    __table_args__ = (UniqueConstraint("environment_id", "datasource_id", "usage", name="ux_env_datasource_usage"),)
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("edb"))
+    environment_id = Column(String(40), ForeignKey("app_environments.id", ondelete="CASCADE"), nullable=False, index=True)
+    datasource_id = Column(String(40), ForeignKey("observability_datasources.id", ondelete="CASCADE"), nullable=False, index=True)
+    usage = Column(String(32), default="metrics", nullable=False)
+    label_mapping = Column(JSON, default=dict, nullable=False)
+    enabled = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    environment = relationship("AppEnvironment")
+    datasource = relationship("ObservabilityDatasource")
+
+
+class ObservationQueryResult(Base):
+    __tablename__ = "observation_query_results"
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("oqr"))
+    datasource_id = Column(String(40), ForeignKey("observability_datasources.id", ondelete="SET NULL"))
+    environment_id = Column(String(40), ForeignKey("app_environments.id", ondelete="SET NULL"))
+    query_type = Column(String(32), nullable=False)
+    query = Column(Text, nullable=False)
+    time_range = Column(String(64), default="", nullable=False)
+    status = Column(String(24), default="pending", nullable=False)
+    summary = Column(JSON, default=dict, nullable=False)
+    samples = Column(JSON, default=list, nullable=False)
+    error_message = Column(Text, default="", nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    datasource = relationship("ObservabilityDatasource")
+    environment = relationship("AppEnvironment")
+
+
+class AiAnalysisJob(Base):
+    __tablename__ = "ai_analysis_jobs"
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("aij"))
+    scope = Column(String(32), nullable=False)
+    target_id = Column(String(40), nullable=False)
+    model_config_id = Column(String(40), ForeignKey("ai_model_configs.id", ondelete="SET NULL"))
+    status = Column(String(24), default="pending", nullable=False)
+    context = Column(JSON, default=dict, nullable=False)
+    error_message = Column(Text, default="", nullable=False)
+    created_by = Column(String(40), ForeignKey("users.id", ondelete="SET NULL"))
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    finished_at = Column(DateTime(timezone=True))
+
+    model_config = relationship("AiModelConfig")
+
+
+class AiAnalysisResult(Base):
+    __tablename__ = "ai_analysis_results"
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("air"))
+    job_id = Column(String(40), ForeignKey("ai_analysis_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    scope = Column(String(32), nullable=False)
+    target_id = Column(String(40), nullable=False)
+    conclusion = Column(Text, default="", nullable=False)
+    probable_cause = Column(Text, default="", nullable=False)
+    impact = Column(Text, default="", nullable=False)
+    recommendation = Column(Text, default="", nullable=False)
+    evidence = Column(JSON, default=list, nullable=False)
+    risk_level = Column(String(24), default="medium", nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    job = relationship("AiAnalysisJob")
+
+
+class AiAssistantSetting(Base):
+    __tablename__ = "ai_assistant_settings"
+
+    id = Column(String(24), primary_key=True, default="default")
+    enabled = Column(Boolean, default=False, nullable=False)
+    model_id = Column(String(40), ForeignKey("ai_model_configs.id", ondelete="SET NULL"))
+    name = Column(String(80), default="OpsRadar AI", nullable=False)
+    welcome_message = Column(Text, default="你好，我可以基于当前页面上下文辅助排障。", nullable=False)
+    quick_prompts = Column(JSON, default=list, nullable=False)
+    prompt_templates = Column(JSON, default=list, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class AiChatSession(Base):
+    __tablename__ = "ai_chat_sessions"
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("acs"))
+    user_id = Column(String(40), ForeignKey("users.id", ondelete="SET NULL"))
+    title = Column(String(128), default="AI Assistant", nullable=False)
+    context = Column(JSON, default=dict, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class AiChatMessage(Base):
+    __tablename__ = "ai_chat_messages"
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("acm"))
+    session_id = Column(String(40), ForeignKey("ai_chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String(16), nullable=False)
+    content = Column(Text, nullable=False)
+    meta = Column(JSON, default=dict, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    session = relationship("AiChatSession")

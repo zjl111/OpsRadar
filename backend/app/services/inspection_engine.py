@@ -6,8 +6,10 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
 from backend.app.db.session import SessionLocal
-from backend.app.models import AuditLog, InspectionItem, Issue, Resource, Task, TaskLog, TaskResult
-from backend.app.services.executors import ExecutionContext, ShellExecutor
+from backend.app.models import AiAnalysisJob, AiAnalysisResult, AppEnvironment, AuditLog, EnvironmentResource, InspectionItem, Issue, Resource, Task, TaskLog, TaskResult
+from backend.app.services.analysis import build_issue_insight
+from backend.app.services.diagnose_tools import diagnose_summary_for_issue
+from backend.app.services.executors import ExecutionContext, InspectionExecutor
 
 
 def _resource_snapshot(resource: Resource) -> dict:
@@ -28,10 +30,14 @@ def _resource_snapshot(resource: Resource) -> dict:
 
 def _item_snapshot(item: InspectionItem, resource: Resource) -> dict:
     command = item.command_template
+    extra = dict(resource.extra_params or {})
     replacements = {
         "ip": resource.ip,
         "port": str(resource.port),
-        "db_name": str((resource.extra_params or {}).get("db_name", "")),
+        "db_name": str(extra.get("db_name", "")),
+        "container_name": str(extra.get("container_name", "")),
+        "compose_project": str(extra.get("compose_project", "")),
+        "compose_service": str(extra.get("compose_service", "")),
     }
     for key, value in replacements.items():
         command = command.replace("{" + key + "}", value)
@@ -51,7 +57,9 @@ def _compatible(resource: Resource, item: InspectionItem) -> bool:
         return True
     if resource.type == item.resource_type:
         return True
-    if resource.type == "host" and item.category in {"host", "security"}:
+    if resource.type in {"host", "linux", "server"} and item.category in {"host", "security", "os"}:
+        return True
+    if resource.type in {"container", "compose", "systemd"} and item.category == "container":
         return True
     return False
 
@@ -60,20 +68,24 @@ def create_manual_task(
     db: Session,
     *,
     name: str,
-    task_type: str,
     resource_ids: list[str],
     item_ids: list[str],
     user_id: str | None,
-    group_id: str | None = None,
+    environment_id: str | None = None,
     config: dict | None = None,
 ) -> Task:
     resources = db.query(Resource).filter(Resource.id.in_(resource_ids)).all()
     items = db.query(InspectionItem).filter(InspectionItem.id.in_(item_ids)).all()
+    environment = db.get(AppEnvironment, environment_id) if environment_id else None
+    environment_bindings = {
+        binding.resource_id: binding
+        for binding in db.query(EnvironmentResource).filter(EnvironmentResource.environment_id == environment_id).all()
+    } if environment_id else {}
     task = Task(
         name=name,
-        task_type=task_type,
         status="pending",
-        group_id=group_id,
+        application_id=environment.application_id if environment else None,
+        environment_id=environment.id if environment else None,
         created_by=user_id,
         summary={"total": 0, "success": 0, "fail": 0, "exception": 0},
         config=config or {},
@@ -84,15 +96,27 @@ def create_manual_task(
 
     total = 0
     for resource in resources:
+        binding = environment_bindings.get(resource.id)
         for item in items:
             if not _compatible(resource, item):
                 continue
+            resource_snapshot = _resource_snapshot(resource)
+            if environment:
+                resource_snapshot.update(
+                    {
+                        "application_id": environment.application_id,
+                        "environment_id": environment.id,
+                        "environment_name": environment.name,
+                        "environment_layer": binding.layer if binding else item.category,
+                        "environment_role": binding.role if binding else resource.type,
+                    }
+                )
             db.add(
                 TaskResult(
                     task_id=task.id,
                     resource_id=resource.id,
                     item_id=item.id,
-                    resource_snapshot=_resource_snapshot(resource),
+                    resource_snapshot=resource_snapshot,
                     item_snapshot=_item_snapshot(item, resource),
                     status="pending",
                 )
@@ -109,6 +133,33 @@ def create_manual_task(
 
 def _append_log(db: Session, task_id: str, level: str, message: str) -> None:
     db.add(TaskLog(task_id=task_id, level=level, message=message))
+
+
+def _record_issue_diagnosis(db: Session, issue: Issue, result: TaskResult) -> None:
+    diagnosis = diagnose_summary_for_issue(issue, result)
+    insight = build_issue_insight(db, issue)
+    job = AiAnalysisJob(
+        scope="issue",
+        target_id=issue.id,
+        status="not_configured",
+        context={"issue_id": issue.id, "diagnose_tools": diagnosis["tools"]},
+        error_message="AI model is not configured; Diagnose Tools evidence was prepared.",
+    )
+    db.add(job)
+    db.flush()
+    db.add(
+        AiAnalysisResult(
+            job_id=job.id,
+            scope="issue",
+            target_id=issue.id,
+            conclusion="诊断工具已匹配",
+            probable_cause=insight.probable_cause,
+            impact=insight.impact,
+            recommendation=insight.recommendation,
+            evidence=diagnosis["evidence"],
+            risk_level=insight.risk_level,
+        )
+    )
 
 
 def recover_stale_tasks(db: Session) -> int:
@@ -142,7 +193,7 @@ async def run_task(task_id: str) -> None:
 
         results = db.query(TaskResult).filter(TaskResult.task_id == task.id).order_by(TaskResult.id).all()
         counters = {"success": 0, "fail": 0, "exception": 0}
-        executor = ShellExecutor()
+        executor = InspectionExecutor()
         for result in results:
             db.refresh(task)
             if task.cancel_requested:
@@ -177,18 +228,19 @@ async def run_task(task_id: str) -> None:
             log_level = "info" if execution.status == "success" else "warning" if execution.status == "fail" else "error"
             _append_log(db, task.id, log_level, f"{result.resource_snapshot.get('name')} / {result.item_snapshot.get('name')} -> {execution.status}.")
             if execution.status in {"fail", "exception"}:
-                db.add(
-                    Issue(
-                        task_result_id=result.id,
-                        task_id=task.id,
-                        resource_id=result.resource_id,
-                        item_id=result.item_id,
-                        summary=f"{result.resource_snapshot.get('name')} / {result.item_snapshot.get('name')} {execution.status}",
-                        severity="high" if execution.status == "exception" else "medium",
-                        status="open",
-                        assignee="Unassigned",
-                    )
+                issue = Issue(
+                    task_result_id=result.id,
+                    task_id=task.id,
+                    resource_id=result.resource_id,
+                    item_id=result.item_id,
+                    summary=f"{result.resource_snapshot.get('name')} / {result.item_snapshot.get('name')} {execution.status}",
+                    severity="high" if execution.status == "exception" else "medium",
+                    status="open",
+                    assignee="Unassigned",
                 )
+                db.add(issue)
+                db.flush()
+                _record_issue_diagnosis(db, issue, result)
             db.commit()
 
         task.status = "cancelled" if task.cancel_requested else "finished"

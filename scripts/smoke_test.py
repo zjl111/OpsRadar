@@ -39,10 +39,22 @@ def main() -> int:
         assert len(bootstrap["inspection_items"]) >= 1, "missing inspection templates"
         assert "dashboard" in bootstrap, "missing dashboard payload"
         assert "resource_types" in bootstrap, "missing resource types"
-        assert "task_types" in bootstrap, "missing task types"
+        assert "applications" in bootstrap, "missing applications"
+        assert "environments" in bootstrap, "missing environments"
+        assert "cron_plans" in bootstrap, "missing schedule policies"
+        assert "tasks" in bootstrap, "missing inspection tasks"
 
         print("smoke ok")
-        print(f"groups={len(bootstrap['resource_groups'])} resources={len(bootstrap['resources'])} tasks={len(bootstrap['tasks'])}")
+        print(
+            " ".join(
+                [
+                    f"applications={len(bootstrap['applications'])}",
+                    f"environments={len(bootstrap['environments'])}",
+                    f"resources={len(bootstrap['resources'])}",
+                    f"tasks={len(bootstrap['tasks'])}",
+                ]
+            )
+        )
         return 0
     except (AssertionError, urllib.error.URLError, urllib.error.HTTPError) as exc:
         print(f"smoke failed: {exc}", file=sys.stderr)
