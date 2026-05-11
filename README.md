@@ -6,23 +6,27 @@ OpsRadar is a production-oriented inspection platform built on FastAPI, PostgreS
 
 ### Login
 
-![OpsRadar login](docs/screenshots/login.png)
+<img width="1912" height="929" alt="image" src="https://github.com/user-attachments/assets/872c06d2-dd35-4ff0-bbb2-4743681b0afd" />
+
 
 ### Overview
 
-![OpsRadar overview](docs/screenshots/overview.png)
+<img width="1917" height="915" alt="image" src="https://github.com/user-attachments/assets/0a42f8ce-3905-4697-9fcf-363156e66db7" />
+
 
 ### Smart Inspection
 
-![OpsRadar smart inspection](docs/screenshots/task-center.png)
+<img width="1918" height="926" alt="image" src="https://github.com/user-attachments/assets/113cb312-6c6b-477c-ab3a-e330cb7f4bcd" />
 
 ### Resource Center
 
-![OpsRadar resources](docs/screenshots/resources.png)
+<img width="1916" height="927" alt="image" src="https://github.com/user-attachments/assets/4f4b76c6-a94f-4f6d-886c-bcc806fcf237" />
+
 
 ### Rule Sets
 
-![OpsRadar rule sets](docs/screenshots/templates.png)
+<img width="1916" height="911" alt="image" src="https://github.com/user-attachments/assets/2806927e-7743-4e65-abe5-5e09b8a9df71" />
+
 
 ## AI Workflow
 
