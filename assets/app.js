@@ -271,6 +271,7 @@ const I18N = {
     "form.commandType": "Command type",
     "tasks.logs": "Logs",
     "tasks.start": "Start",
+    "tasks.rerun": "Rerun",
     "tasks.viewReport": "Report",
     "tasks.inspectionTasks": "Inspection Tasks",
     "tasks.templates": "Inspection Templates",
@@ -661,6 +662,7 @@ const I18N = {
     "form.commandType": "命令类型",
     "tasks.logs": "日志",
     "tasks.start": "启动",
+    "tasks.rerun": "重新执行",
     "tasks.viewReport": "查看报告",
     "tasks.inspectionTasks": "巡检任务",
     "tasks.templates": "巡检模板",
@@ -807,6 +809,7 @@ const state = {
   pageSizes: JSON.parse(localStorage.getItem("opsradar_page_sizes") || "{}"),
   resourceColumns: JSON.parse(localStorage.getItem("opsradar_resource_columns") || "null"),
   issueColumns: JSON.parse(localStorage.getItem("opsradar_issue_columns") || "null"),
+  filterPanels: JSON.parse(localStorage.getItem("opsradar_filter_panels") || "{}"),
   testingResources: new Set(),
   discoveringResources: new Set(),
   expandedResources: new Set(),
@@ -815,6 +818,15 @@ const state = {
     status: "all",
     owner: "all",
   },
+  resourceFilters: {
+    environment: "all",
+    type: "all",
+    status: "all",
+  },
+  reportFilters: {
+    environment: "all",
+    status: "all",
+  },
   issueFilters: {
     task: "all",
     environment: "all",
@@ -822,6 +834,7 @@ const state = {
     status: "all",
     resourceType: "all",
   },
+  filterSubmenus: {},
   environmentStatusFilter: "all",
   taskCreateDefaults: null,
   resourceCreateDefaults: null,
@@ -898,6 +911,9 @@ const iconPaths = {
   tasks: "M9 6h11M9 12h11M9 18h11M4 6h1M4 12h1M4 18h1",
   reports: "M6 3h9l5 5v13H6V3Zm8 1v5h5M9 14h8M9 18h6",
   alert: "M12 3 2 21h20L12 3Zm0 6v5m0 3h.01",
+  target: "M12 3v3m0 12v3M3 12h3m12 0h3M7.8 7.8l2.1 2.1m4.2 4.2 2.1 2.1m0-8.4-2.1 2.1m-4.2 4.2-2.1 2.1M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z",
+  plus: "M12 5v14M5 12h14",
+  briefcase: "M10 6V5a2 2 0 0 1 2-2h0a2 2 0 0 1 2 2v1m-8 0h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Zm0 6h12",
   sparkles: "M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3Zm6 9 .9 2.1L21 15l-2.1.9L18 18l-.9-2.1L15 15l2.1-.9L18 12ZM5 13l1 2.5L9 16.5l-2.5 1L5 20l-1.5-2.5L1 16.5l2.5-1L5 13Z",
   users: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm13 10v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
   shield: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Zm-3-10 2 2 4-5",
@@ -911,6 +927,8 @@ const iconPaths = {
   play: "M8 5v14l11-7-11-7Z",
   download: "M12 3v12m0 0 4-4m-4 4-4-4M4 21h16",
   search: "M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z",
+  "chevron-right": "M9 5l7 7-7 7",
+  "chevron-down": "M5 9l7 7 7-7",
   calendar: "M7 3v3m10-3v3M4 8h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Zm3 7h3m3 0h3m-9 4h3m3 0h3",
   trash: "M3 6h18M8 6V4h8v2m-9 0 1 15h8l1-15M10 11v6m4-6v6",
   send: "M22 2 11 13m11-11-7 20-4-9-9-4 20-7Z",
@@ -1345,6 +1363,21 @@ function selectedCount(scope) {
   return selectionSet(scope).size;
 }
 
+function filterPanelOpen(scope) {
+  return state.filterPanels?.[scope] === true;
+}
+
+function toggleFilterPanel(scope) {
+  state.filterPanels = state.filterPanels || {};
+  state.filterPanels[scope] = !filterPanelOpen(scope);
+  if (!state.filterPanels[scope]) state.filterSubmenus[scope] = null;
+  localStorage.setItem("opsradar_filter_panels", JSON.stringify(state.filterPanels));
+}
+
+function toggleFilterSubmenu(scope, name) {
+  state.filterSubmenus[scope] = state.filterSubmenus[scope] === name ? null : name;
+}
+
 function rowBulkId(row) {
   return row.bulk_id || row.id;
 }
@@ -1372,6 +1405,10 @@ function bulkResolveIssuesButton() {
 function tableToolbar(scope, title, subtitle, total, extra = "", allowDelete = false) {
   const hasTitle = Boolean(title || subtitle);
   const hasExtra = Boolean(extra);
+  const filterOpen = ["tasks", "issues", "resources", "reports"].includes(scope) ? filterPanelOpen(scope) : null;
+  const extraObject = typeof extra === "object" && extra !== null ? extra : {};
+  const filterPanel = extraObject.filterPanel || "";
+  const extraHtml = typeof extra === "string" ? extra : (extra.html || "");
   return `
     <div class="table-toolbar ${hasTitle ? "" : "compact"} ${hasExtra ? "with-extra" : ""}">
       ${hasTitle ? `<div class="table-toolbar-title">
@@ -1379,11 +1416,15 @@ function tableToolbar(scope, title, subtitle, total, extra = "", allowDelete = f
         <div class="panel-subtitle">${escapeHtml(subtitle)}</div>
       </div>` : ""}
       <div class="table-toolbar-actions">
-        <label class="table-search">
-          ${icon("search")}
-          <input value="${escapeHtml(state.filters[scope] || "")}" data-filter-scope="${scope}" placeholder="${t("search.local")}">
-        </label>
-        ${extra}
+        <div class="search-filter-anchor">
+          <label class="table-search search-right-icon search-with-toggle">
+            ${filterOpen === null ? "" : `<button class="filter-toggle-inline ${filterOpen ? "active" : ""}" type="button" data-action="toggle-filter-panel" data-scope="${escapeHtml(scope)}" aria-label="${state.lang === "zh" ? "展开或收起筛选" : "Toggle filters"}">${icon(filterOpen ? "chevron-down" : "chevron-right")}</button>`}
+            <input value="${escapeHtml(state.filters[scope] || "")}" data-filter-scope="${scope}" placeholder="${t("search.local")}">
+            ${icon("search")}
+          </label>
+          ${filterPanel}
+        </div>
+        ${extraHtml}
         ${allowDelete ? bulkDeleteButton(scope) : ""}
       </div>
     </div>
@@ -1429,6 +1470,19 @@ function setLanguage(lang) {
   state.lang = lang;
   localStorage.setItem("opsradar_lang", lang);
   document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+}
+
+for (const scope of ["tasks", "issues"]) {
+  if (state.filterPanels?.[scope] !== true) {
+    state.filterPanels[scope] = false;
+    state.filterSubmenus[scope] = null;
+  }
+}
+for (const scope of ["resources", "reports"]) {
+  if (state.filterPanels?.[scope] !== true) {
+    state.filterPanels[scope] = false;
+    state.filterSubmenus[scope] = null;
+  }
 }
 
 function toast(message, type = "success") {
@@ -1664,6 +1718,7 @@ function aiChatMessageHtml(message, scope = "page") {
     <div class="ai-chat-row ${isUser ? "user" : "assistant"}">
       <div class="ai-chat-bubble">
         <div class="ai-message-content">${isUser ? escapeHtml(message.content) : renderAssistantMarkdown(message.content, scope)}</div>
+        ${!isUser ? aiActionSourceHtml(message.meta || {}) : ""}
         ${!isUser && workflow && workflow.status !== "not_required" ? aiWorkflowHtml(workflow) : ""}
         <span>${escapeHtml(message.time || currentTimeLabel())}</span>
       </div>
@@ -1671,30 +1726,88 @@ function aiChatMessageHtml(message, scope = "page") {
   `;
 }
 
+function aiActionSourceHtml(meta = {}) {
+  const status = meta.status || "";
+  const sourceMap = {
+    "action:list_issues": state.lang === "zh" ? "OpsRadar 问题列表" : "OpsRadar Issues",
+    "action:list_assets": state.lang === "zh" ? "OpsRadar 资产列表" : "OpsRadar Assets",
+    "action:get_platform_summary": state.lang === "zh" ? "OpsRadar 平台统计" : "OpsRadar Summary",
+    empty_context: state.lang === "zh" ? "OpsRadar 数据上下文" : "OpsRadar Context",
+    workflow_ready: state.lang === "zh" ? "OpsRadar 工作流" : "OpsRadar Workflow",
+    observability_not_configured: state.lang === "zh" ? "OpsRadar 数据源配置" : "OpsRadar Datasources",
+  };
+  const source = sourceMap[status];
+  if (!source) return "";
+  const chips = [];
+  const ctx = meta.data_context || {};
+  if (ctx.target_application) chips.push(`${state.lang === "zh" ? "目标应用" : "Target app"} ${ctx.target_application}`);
+  if (ctx.target_environment) chips.push(`${state.lang === "zh" ? "目标环境" : "Target env"} ${ctx.target_environment}`);
+  if (Number.isFinite(Number(ctx.matched_environments))) chips.push(`${state.lang === "zh" ? "匹配环境" : "Matched envs"} ${ctx.matched_environments}`);
+  if (Number.isFinite(Number(ctx.matched_assets))) chips.push(`${state.lang === "zh" ? "匹配资产" : "Matched assets"} ${ctx.matched_assets}`);
+  if (Number.isFinite(Number(ctx.issues))) chips.push(`${state.lang === "zh" ? "问题" : "Issues"} ${ctx.issues}`);
+  if (status !== "workflow_ready" && Number.isFinite(Number(ctx.resources))) chips.push(`${state.lang === "zh" ? "资产" : "Assets"} ${ctx.resources}`);
+  if (status !== "workflow_ready" && Number.isFinite(Number(ctx.tasks))) chips.push(`${state.lang === "zh" ? "任务" : "Tasks"} ${ctx.tasks}`);
+  return `
+    <div class="ai-source-card">
+      <strong>${state.lang === "zh" ? "数据来源" : "Source"}：${escapeHtml(source)}</strong>
+      ${chips.length ? `<div>${chips.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+    </div>
+  `;
+}
+
 function aiWorkflowHtml(workflow) {
   const steps = workflow.steps || [];
   if (!steps.length) return "";
-  const labelMap = {
-    completed: state.lang === "zh" ? "已完成" : "Done",
-    awaiting_confirmation: state.lang === "zh" ? "待确认" : "Confirm",
-    blocked: state.lang === "zh" ? "待补充" : "Blocked",
-    pending: state.lang === "zh" ? "待执行" : "Pending",
-    running: state.lang === "zh" ? "执行中" : "Running",
-    skipped: state.lang === "zh" ? "跳过" : "Skipped",
+  const target = workflow.target || {};
+  const context = workflow.context || {};
+  const activeIndex = Math.max(0, steps.findIndex((step) => ["awaiting_confirmation", "running", "blocked"].includes(step.status)));
+  const nextAction = (workflow.next_actions || [])[0] || {};
+  const actionMap = {
+    open_application_modal: { icon: "plus", label: nextAction.label || (state.lang === "zh" ? "创建应用环境" : "Create environment") },
+    open_resource_modal: { icon: "plus", label: nextAction.label || (state.lang === "zh" ? "添加资产" : "Add asset") },
+    open_task_modal: { icon: "checklist", label: nextAction.label || (state.lang === "zh" ? "创建巡检任务" : "Create task") },
+    open_environment_rules_modal: { icon: "settings", label: nextAction.label || (state.lang === "zh" ? "绑定规则集" : "Bind rules") },
+    run_workflow_action: { icon: "play", label: nextAction.label || (state.lang === "zh" ? "继续" : "Continue") },
+    select_assets: { icon: "server", label: nextAction.label || (state.lang === "zh" ? "选择资产" : "Select assets") },
+    navigate: { icon: "trend", label: nextAction.label || (state.lang === "zh" ? "查看详情" : "View details") },
   };
+  const workflowActions = workflow.next_actions || [];
+  const primaryAction = workflowActions[0] || null;
+  const secondaryActions = workflowActions.slice(1);
   return `
     <div class="ai-workflow-card">
-      <div class="ai-workflow-title">${state.lang === "zh" ? "AI 编排步骤" : "AI Workflow"}</div>
+      <div class="ai-workflow-head">
+        <span class="ai-workflow-icon">${icon("target")}</span>
+        <h3>${state.lang === "zh" ? "巡检目标" : "Inspection Target"}</h3>
+      </div>
+      <div class="ai-workflow-summary">
+        <div><span>${state.lang === "zh" ? "目标应用" : "Application"}</span><strong>${escapeHtml(target.application_name || context.candidate_application_name || "-")}</strong></div>
+        <div><span>${state.lang === "zh" ? "目标环境" : "Environment"}</span><strong>${escapeHtml(target.env_label || context.candidate_environment_name || "-")}</strong></div>
+        <div><span>${state.lang === "zh" ? "匹配环境" : "Matched envs"}</span><strong>${escapeHtml(context.environment_id || context.candidate_environment_id ? 1 : 0)}</strong></div>
+        <div><span>${state.lang === "zh" ? "匹配资产" : "Matched assets"}</span><strong>${escapeHtml((context.resource_ids || []).length || 0)}</strong></div>
+        <div><span>${state.lang === "zh" ? "下一步" : "Next"}</span><strong>${escapeHtml(workflow.current_step || "-")}</strong></div>
+      </div>
+      <div class="ai-workflow-action-strip">
+        ${primaryAction ? aiWorkflowActionButton(primaryAction, workflow.id, actionMap[primaryAction.ui_action]?.icon || "play", true) : ""}
+        ${secondaryActions.map((item) => aiWorkflowActionButton(item, workflow.id, actionMap[item.ui_action]?.icon || "briefcase", false)).join("")}
+      </div>
+      <div class="ai-workflow-timeline">
       ${steps.map((step, index) => `
-        <div class="ai-workflow-step ${escapeHtml(step.status || "")}">
-          <span>${index + 1}</span>
-          <div><strong>${escapeHtml(step.title || step.action_name || "-")}</strong><small>${escapeHtml(step.summary || "")}</small></div>
-          <em>${escapeHtml(labelMap[step.status] || step.status || "-")}</em>
+        <div class="ai-workflow-node ${escapeHtml(step.status || "")} ${index === activeIndex ? "active" : ""}">
+          <i>${step.status === "completed" ? icon("shield") : ""}</i>
+          ${index < steps.length - 1 ? `<b>${icon("chevron-right")}</b>` : ""}
+          <span>${escapeHtml(step.title || step.action_name || "-")}</span>
         </div>
       `).join("")}
-      ${aiWorkflowActionsHtml(workflow)}
+      </div>
+      <div class="ai-workflow-current">${state.lang === "zh" ? "当前步骤" : "Current step"}：<strong>${escapeHtml(workflow.current_step || "-")}</strong></div>
     </div>
   `;
+}
+
+function aiWorkflowActionButton(item, workflowId, iconName = "play", primary = false) {
+  const classes = `btn ${primary || item.style === "primary" ? "primary" : ""} ${primary ? "workflow-primary-action" : "workflow-secondary-action"}`.trim();
+  return `<button class="${classes}" type="button" data-action="workflow-next-action" data-workflow-id="${escapeHtml(workflowId || "")}" data-ui-action="${escapeHtml(item.ui_action || "")}" data-action-name="${escapeHtml(item.action_name || "")}" data-event-name="${escapeHtml(item.event || "")}" data-params="${escapeHtml(encodeWorkflowParams(item.params || {}))}" data-confirm="${item.requires_confirmation ? "true" : "false"}">${icon(iconName)} ${escapeHtml(item.label || item.action_name || "-")}</button>`;
 }
 
 function aiWorkflowActionsHtml(workflow) {
@@ -1922,10 +2035,10 @@ function renderOverviewKpis(cards, weeklyReports = []) {
   return `
     <div class="overview-kpi-grid">
       ${overviewKpiCard({
-        label: state.lang === "zh" ? "巡检资产" : "Inspection Assets",
+        label: state.lang === "zh" ? "总资产数" : "Total Assets",
         value: cards.managed_resources || 0,
         iconName: "server",
-        body: `<div class="overview-kpi-note">${state.lang === "zh" ? "当前纳管资源" : "Managed resources"}</div>`,
+        body: `<div class="overview-kpi-note">${state.lang === "zh" ? "资源列表实体资产" : "Resource list entities"}</div>`,
       })}
       ${overviewKpiCard({
         label: state.lang === "zh" ? "巡检任务" : "Inspection Tasks",
@@ -2523,10 +2636,10 @@ function renderDashboardKpis(cards) {
   return `
     <div class="dashboard-v2-kpis">
       ${dashboardMetricCard({
-        label: state.lang === "zh" ? "巡检资产数" : "Inspection Assets",
+        label: state.lang === "zh" ? "总资产数" : "Total Assets",
         value: resourceCount,
         iconName: "server",
-        sub: state.lang === "zh" ? "纳管巡检对象" : "Managed targets",
+        sub: state.lang === "zh" ? "资源列表实体资产" : "Resource list entities",
       })}
       ${dashboardMetricCard({
         label: state.lang === "zh" ? "巡检任务" : "Inspection Tasks",
@@ -3059,14 +3172,23 @@ function renderResourceListPanel() {
   const rows = state.data.resources
     .filter((res) => !(res.extra_params || {}).parent_resource_id)
     .map((res) => ({ ...res, environment_label: (res.environment_names || []).join(" / ") }));
-  const filtered = filterRows("resources", rows, ["name", "type", "environment_label", "ip", "port", "os", "cpu", "memory", "status", "username"]);
+  const filtered = filterRows("resources", rows, ["name", "type", "environment_label", "ip", "port", "os", "cpu", "memory", "status", "username"])
+    .filter((res) => {
+      const matchesEnvironment = state.resourceFilters.environment === "all" || (res.environment_names || []).includes(state.resourceFilters.environment);
+      const matchesType = state.resourceFilters.type === "all" || res.type === state.resourceFilters.type;
+      const matchesStatus = state.resourceFilters.status === "all" || res.status === state.resourceFilters.status;
+      return matchesEnvironment && matchesType && matchesStatus;
+    });
   const pageInfo = paginate("resources", filtered);
-  const resourceActions = `
+  const resourceActions = {
+    filterPanel: resourceFilterPanel(rows),
+    html: `
     <button class="btn primary small" data-action="add-resource">${t("action.addResource")}</button>
     ${columnPicker()}
     ${resourceBulkTestButton(filtered.length)}
     ${resourceBulkDiscoverButton(filtered)}
-  `;
+    ${bulkDeleteButton("resources")}
+  `};
   const columns = visibleResourceColumns();
   return `
     <div class="module-pane">
@@ -3201,24 +3323,102 @@ function filteredTaskRows() {
 }
 
 function taskFilterSelect(name, label, options) {
+  const open = state.filterSubmenus.tasks === name;
   return `
-    <label class="filter-select task-filter">
-      <span>${escapeHtml(label)}</span>
-      <select class="select compact-select" data-task-filter="${name}">
-        ${options.map(([value, text]) => `<option value="${escapeHtml(value)}" ${state.taskFilters[name] === value ? "selected" : ""}>${escapeHtml(text)}</option>`).join("")}
-      </select>
-    </label>
+    <div class="filter-menu-item task-filter ${open ? "open" : ""}">
+      <button type="button" class="filter-menu-head" data-action="toggle-filter-submenu" data-scope="tasks" data-name="${escapeHtml(name)}">
+        <span>${escapeHtml(label)}</span>
+        ${icon("chevron-right")}
+      </button>
+      <div class="filter-menu-options">
+        ${options.map(([value, text]) => `
+          <button type="button" class="${state.taskFilters[name] === value ? "active" : ""}" data-action="set-task-filter" data-name="${escapeHtml(name)}" data-value="${escapeHtml(value)}">
+            ${escapeHtml(text)}
+          </button>
+        `).join("")}
+      </div>
+    </div>
   `;
 }
 
 function issueFilterSelect(name, label, options) {
+  const open = state.filterSubmenus.issues === name;
   return `
-    <label class="filter-select issue-filter">
-      <span>${escapeHtml(label)}</span>
-      <select class="select compact-select" data-issue-filter="${name}">
-        ${options.map(([value, text]) => `<option value="${escapeHtml(value)}" ${state.issueFilters[name] === value ? "selected" : ""}>${escapeHtml(text)}</option>`).join("")}
-      </select>
-    </label>
+    <div class="filter-menu-item issue-filter ${open ? "open" : ""}">
+      <button type="button" class="filter-menu-head" data-action="toggle-filter-submenu" data-scope="issues" data-name="${escapeHtml(name)}">
+        <span>${escapeHtml(label)}</span>
+        ${icon("chevron-right")}
+      </button>
+      <div class="filter-menu-options">
+        ${options.map(([value, text]) => `
+          <button type="button" class="${state.issueFilters[name] === value ? "active" : ""}" data-action="set-issue-filter" data-name="${escapeHtml(name)}" data-value="${escapeHtml(value)}">
+            ${escapeHtml(text)}
+          </button>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function resourceFilterSelect(name, label, options) {
+  const open = state.filterSubmenus.resources === name;
+  return `
+    <div class="filter-menu-item resource-filter ${open ? "open" : ""}">
+      <button type="button" class="filter-menu-head" data-action="toggle-filter-submenu" data-scope="resources" data-name="${escapeHtml(name)}">
+        <span>${escapeHtml(label)}</span>
+        ${icon("chevron-right")}
+      </button>
+      <div class="filter-menu-options">
+        ${options.map(([value, text]) => `
+          <button type="button" class="${state.resourceFilters[name] === value ? "active" : ""}" data-action="set-resource-filter" data-name="${escapeHtml(name)}" data-value="${escapeHtml(value)}">
+            ${escapeHtml(text)}
+          </button>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function reportFilterSelect(name, label, options) {
+  const open = state.filterSubmenus.reports === name;
+  return `
+    <div class="filter-menu-item report-filter ${open ? "open" : ""}">
+      <button type="button" class="filter-menu-head" data-action="toggle-filter-submenu" data-scope="reports" data-name="${escapeHtml(name)}">
+        <span>${escapeHtml(label)}</span>
+        ${icon("chevron-right")}
+      </button>
+      <div class="filter-menu-options">
+        ${options.map(([value, text]) => `
+          <button type="button" class="${state.reportFilters[name] === value ? "active" : ""}" data-action="set-report-filter" data-name="${escapeHtml(name)}" data-value="${escapeHtml(value)}">
+            ${escapeHtml(text)}
+          </button>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function resourceFilterPanel(rows) {
+  const environmentsList = [...new Set(rows.flatMap((resource) => resource.environment_names || []).filter(Boolean))].sort();
+  const types = [...new Set(rows.map((resource) => resource.type).filter(Boolean))].sort();
+  const statuses = [...new Set(rows.map((resource) => resource.status).filter(Boolean))].sort();
+  return `
+    <div class="resource-filter-panel ${filterPanelOpen("resources") ? "open" : "collapsed"}">
+      ${resourceFilterSelect("environment", state.lang === "zh" ? "所属环境" : "Environment", [["all", state.lang === "zh" ? "全部" : "All"], ...environmentsList.map((value) => [value, value])])}
+      ${resourceFilterSelect("type", state.lang === "zh" ? "资源类型" : "Resource Type", [["all", state.lang === "zh" ? "全部" : "All"], ...types.map((value) => [value, resourceTypeLabel(value)])])}
+      ${resourceFilterSelect("status", state.lang === "zh" ? "状态" : "Status", [["all", state.lang === "zh" ? "全部" : "All"], ...statuses.map((value) => [value, statusText(value)])])}
+    </div>
+  `;
+}
+
+function reportFilterPanel(rows) {
+  const environmentsList = [...new Set(rows.map((report) => report.environment_name).filter(Boolean))].sort();
+  const statuses = [...new Set(rows.map((report) => report.status).filter(Boolean))].sort();
+  return `
+    <div class="report-filter-panel ${filterPanelOpen("reports") ? "open" : "collapsed"}">
+      ${reportFilterSelect("environment", state.lang === "zh" ? "所属环境" : "Environment", [["all", state.lang === "zh" ? "全部" : "All"], ...environmentsList.map((value) => [value, value])])}
+      ${reportFilterSelect("status", state.lang === "zh" ? "状态" : "Status", [["all", state.lang === "zh" ? "全部" : "All"], ...statuses.map((value) => [value, statusText(value)])])}
+    </div>
   `;
 }
 
@@ -3235,6 +3435,10 @@ function canStartTask(task) {
   return task.source === "task" && ["pending", "failed"].includes(task.status);
 }
 
+function canRerunTask(task) {
+  return task.source === "task" && ["finished", "failed", "cancelled"].includes(task.status);
+}
+
 function taskActionButtons(task) {
   const id = escapeHtml(rowBulkId(task));
   const taskId = escapeHtml(task.id);
@@ -3242,6 +3446,7 @@ function taskActionButtons(task) {
   return `
     <div class="row-actions task-actions">
       ${canStartTask(task) ? `<button class="btn primary small" data-action="start-task" data-id="${taskId}">${icon("play")} ${t("tasks.start")}</button>` : ""}
+      ${canRerunTask(task) ? `<button class="btn primary small" data-action="rerun-task" data-id="${taskId}">${icon("play")} ${t("tasks.rerun")}</button>` : ""}
       <button class="btn small" data-action="edit-task" data-id="${id}">${t("action.edit")}</button>
       <button class="btn ghost small log-action" data-action="task-execution-log" data-id="${taskId}">${icon("audit")} ${t("tasks.logs")}</button>
       ${reportAvailable ? `<button class="btn ghost small" data-action="view-task-report" data-id="${taskId}">${icon("reports")} ${t("tasks.viewReport")}</button>` : ""}
@@ -3254,16 +3459,22 @@ function renderTaskList() {
   const filtered = filteredTaskRows();
   const pageInfo = paginate("tasks", filtered, pageSize("tasks"));
   const owners = [...new Set(rows.map((task) => task.owner).filter(Boolean))];
+  const filterOpen = filterPanelOpen("tasks");
   return `
     <section class="task-center-shell">
       <section class="panel task-main-panel">
         <div class="task-filter-bar">
-          ${taskFilterSelect("status", t("table.status"), [["all", t("tasks.all")], ["pending", statusText("pending")], ["queued", statusText("queued")], ["running", statusText("running")], ["finished", statusText("finished")], ["failed", statusText("failed")]])}
-          ${taskFilterSelect("owner", t("tasks.owner"), [["all", t("tasks.all")], ...owners.map((owner) => [owner, owner])])}
-          <label class="table-search task-search">
-            ${icon("search")}
-            <input value="${escapeHtml(state.filters.tasks || "")}" data-filter-scope="tasks" placeholder="${t("tasks.searchPlaceholder")}">
-          </label>
+          <div class="search-filter-anchor">
+            <label class="table-search search-right-icon search-with-toggle task-search">
+              <button class="filter-toggle-inline ${filterOpen ? "active" : ""}" type="button" data-action="toggle-filter-panel" data-scope="tasks" aria-label="${state.lang === "zh" ? "展开或收起筛选" : "Toggle filters"}">${icon(filterOpen ? "chevron-down" : "chevron-right")}</button>
+              <input value="${escapeHtml(state.filters.tasks || "")}" data-filter-scope="tasks" placeholder="${t("tasks.searchPlaceholder")}">
+              ${icon("search")}
+            </label>
+            <div class="task-filter-panel ${filterOpen ? "open" : "collapsed"}">
+              ${taskFilterSelect("status", t("table.status"), [["all", t("tasks.all")], ["pending", statusText("pending")], ["queued", statusText("queued")], ["running", statusText("running")], ["finished", statusText("finished")], ["failed", statusText("failed")]])}
+              ${taskFilterSelect("owner", t("tasks.owner"), [["all", t("tasks.all")], ...owners.map((owner) => [owner, owner])])}
+            </div>
+          </div>
           <button class="btn small" data-action="reset-task-filters">${t("tasks.reset")}</button>
           ${bulkDeleteButton("tasks")}
           <button class="btn primary small" data-action="run-task">${icon("play")} ${t("tasks.new")}</button>
@@ -3375,25 +3586,32 @@ function renderReports() {
 }
 
 function renderReportHistory() {
-  const persistedReports = state.data.inspection_reports || [];
-  const finished = persistedReports.length
-    ? persistedReports.map((report) => ({
-      ...report,
-      id: report.task_id || report.id,
-      name: report.task_name || report.summary?.task_name || report.id,
-      status: report.task_status || report.status,
-      finished_at: report.finished_at || report.created_at,
-    }))
-    : state.data.tasks.filter((task) => ["finished", "failed"].includes(task.status));
-  const filtered = filterRows("reports", finished, ["name", "status", "id", "application_name", "environment_name"]);
+  const reports = (state.data.inspection_reports || []).map((report) => ({
+    ...report,
+    id: report.task_id || report.id,
+    name: report.task_name || report.summary?.task_name || report.id,
+    status: report.task_status || report.status,
+    finished_at: report.finished_at || report.created_at,
+  }));
+  const filtered = filterRows("reports", reports, ["name", "status", "id", "application_name", "environment_name", "summary"])
+    .filter((report) => {
+      const matchesEnvironment = state.reportFilters.environment === "all" || report.environment_name === state.reportFilters.environment;
+      const matchesStatus = state.reportFilters.status === "all" || report.status === state.reportFilters.status;
+      return matchesEnvironment && matchesStatus;
+    });
   const pageInfo = paginate("reports", filtered);
-  const mergeControls = `
+  const mergeControls = {
+    filterPanel: reportFilterPanel(reports),
+    html: `
     <select class="select compact-select" id="merge-format"><option value="html">HTML</option><option value="docx">DOCX</option><option value="pdf">PDF</option></select>
     <button class="btn primary small" data-action="export-merged">${t("reports.merge")}</button>
-  `;
+  `};
   return `
     <div class="module-pane">
-      ${tableToolbar("reports", "", "", filtered.length, mergeControls)}
+      ${tableToolbar("reports", "", "", filtered.length, {
+        filterPanel: mergeControls.filterPanel,
+        html: `${mergeControls.html}${bulkDeleteButton("reports")}`,
+      })}
       <div class="table-wrap">
         <table class="table">
           <thead><tr><th class="select-col">${selectAllCell("reports", pageInfo.items)}</th><th>${t("table.report")}</th><th>${t("table.status")}</th><th>${t("table.summary")}</th><th>${t("table.finished")}</th><th>${t("table.downloads")}</th></tr></thead>
@@ -3409,6 +3627,7 @@ function renderReportHistory() {
                   <button class="btn small" data-action="export-report" data-id="${task.id}" data-format="html">HTML</button>
                   <button class="btn small" data-action="export-report" data-id="${task.id}" data-format="docx">DOCX</button>
                   <button class="btn small" data-action="export-report" data-id="${task.id}" data-format="pdf">PDF</button>
+                  <button class="btn danger small" data-action="delete-report" data-id="${task.id}">${icon("trash")} ${state.lang === "zh" ? "删除" : "Delete"}</button>
                 </td>
               </tr>
             `).join("") || `<tr><td colspan="6"><div class="empty">${t("search.empty")}</div></td></tr>`}
@@ -3500,18 +3719,24 @@ function renderIssuesPanel() {
   const pendingCount = rows.filter((issue) => !["resolved", "ignored"].includes(issue.status)).length;
   const analyzedCount = rows.filter((issue) => issue.insight).length;
   const resolvedCount = rows.filter((issue) => issue.status === "resolved").length;
+  const filterOpen = filterPanelOpen("issues");
   return `
     <div class="problem-board">
       <div class="problem-filter-bar">
-        ${issueFilterSelect("task", state.lang === "zh" ? "所属任务" : "Task", [["all", state.lang === "zh" ? "请选择任务" : "Select task"], ...tasks.map((value) => [value, value])])}
-        ${issueFilterSelect("environment", state.lang === "zh" ? "所属环境" : "Environment", [["all", state.lang === "zh" ? "请选择环境" : "Select environment"], ...environmentsList.map((value) => [value, value])])}
-        ${issueFilterSelect("severity", state.lang === "zh" ? "问题等级" : "Severity", [["all", state.lang === "zh" ? "请选择等级" : "Select severity"], ["critical", severityMeta("critical").label], ["high", severityMeta("high").label], ["medium", severityMeta("medium").label], ["low", severityMeta("low").label]])}
-        ${issueFilterSelect("status", state.lang === "zh" ? "处理状态" : "Status", [["all", state.lang === "zh" ? "请选择状态" : "Select status"], ["open", issueStatusLabel({ status: "open" })], ["in_progress", issueStatusLabel({ status: "in_progress" })], ["resolved", issueStatusLabel({ status: "resolved" })], ["ignored", issueStatusLabel({ status: "ignored" })]])}
-        ${issueFilterSelect("resourceType", state.lang === "zh" ? "问题类型" : "Issue Type", [["all", state.lang === "zh" ? "请选择类型" : "Select type"], ...resourceTypes.map((type) => [type, resourceTypeLabel(type)])])}
-        <label class="table-search problem-search">
-          ${icon("search")}
-          <input value="${escapeHtml(state.filters.issues || "")}" data-filter-scope="issues" placeholder="${state.lang === "zh" ? "搜索问题名称、资源、IP..." : "Search issue, resource, IP..."}">
-        </label>
+        <div class="search-filter-anchor">
+          <label class="table-search search-right-icon search-with-toggle problem-search">
+            <button class="filter-toggle-inline ${filterOpen ? "active" : ""}" type="button" data-action="toggle-filter-panel" data-scope="issues" aria-label="${state.lang === "zh" ? "展开或收起筛选" : "Toggle filters"}">${icon(filterOpen ? "chevron-down" : "chevron-right")}</button>
+            <input value="${escapeHtml(state.filters.issues || "")}" data-filter-scope="issues" placeholder="${state.lang === "zh" ? "搜索问题名称、资源、IP..." : "Search issue, resource, IP..."}">
+            ${icon("search")}
+          </label>
+          <div class="problem-filter-panel ${filterOpen ? "open" : "collapsed"}">
+            ${issueFilterSelect("task", state.lang === "zh" ? "所属任务" : "Task", [["all", state.lang === "zh" ? "全部" : "All"], ...tasks.map((value) => [value, value])])}
+            ${issueFilterSelect("environment", state.lang === "zh" ? "所属环境" : "Environment", [["all", state.lang === "zh" ? "全部" : "All"], ...environmentsList.map((value) => [value, value])])}
+            ${issueFilterSelect("severity", state.lang === "zh" ? "问题等级" : "Severity", [["all", state.lang === "zh" ? "全部" : "All"], ["critical", severityMeta("critical").label], ["high", severityMeta("high").label], ["medium", severityMeta("medium").label], ["low", severityMeta("low").label]])}
+            ${issueFilterSelect("status", state.lang === "zh" ? "处理状态" : "Status", [["all", state.lang === "zh" ? "全部" : "All"], ["open", issueStatusLabel({ status: "open" })], ["in_progress", issueStatusLabel({ status: "in_progress" })], ["resolved", issueStatusLabel({ status: "resolved" })], ["ignored", issueStatusLabel({ status: "ignored" })]])}
+            ${issueFilterSelect("resourceType", state.lang === "zh" ? "问题类型" : "Issue Type", [["all", state.lang === "zh" ? "全部" : "All"], ...resourceTypes.map((type) => [type, resourceTypeLabel(type)])])}
+          </div>
+        </div>
         <button class="btn small" data-action="reset-issue-filters">${state.lang === "zh" ? "重置" : "Reset"}</button>
         ${bulkResolveIssuesButton()}
         ${bulkDeleteButton("issues")}
@@ -5582,10 +5807,15 @@ function assistantStateFor(scope = "page") {
 }
 
 function scrollAiChatToBottom(scope = "page") {
-  requestAnimationFrame(() => {
-    const selector = scope === "floating" ? ".ai-chat-messages" : ".ai-conversation-panel";
+  const selector = scope === "floating" ? ".ai-chat-messages" : ".ai-conversation-panel";
+  const scroll = () => {
     const messages = document.querySelector(selector);
-    if (messages) messages.scrollTop = messages.scrollHeight;
+    if (messages) messages.scrollTo({ top: messages.scrollHeight, behavior: "auto" });
+  };
+  requestAnimationFrame(() => {
+    scroll();
+    setTimeout(scroll, 0);
+    setTimeout(scroll, 80);
   });
 }
 
@@ -5654,6 +5884,7 @@ async function runWorkflowAction(workflowId, actionName, params = {}, confirmed 
   appendWorkflowResponse(response, scope);
   await loadBootstrap();
   render();
+  scrollAiChatToBottom(scope);
 }
 
 async function sendWorkflowEvent(eventName, payload = {}) {
@@ -5663,8 +5894,10 @@ async function sendWorkflowEvent(eventName, payload = {}) {
     method: "POST",
     body: JSON.stringify({ event: eventName, payload }),
   });
-  appendWorkflowResponse({ workflow: response, message: state.lang === "zh" ? "我已收到补充信息，继续推进流程。" : "Workflow continued." }, callback.scope || "page");
+  const scope = callback.scope || "page";
+  appendWorkflowResponse({ workflow: response, message: state.lang === "zh" ? "我已收到补充信息，继续推进流程。" : "Workflow continued." }, scope);
   state.workflowCallback = null;
+  scrollAiChatToBottom(scope);
 }
 
 async function sendAiChat(message, scope = "page") {
@@ -5690,7 +5923,18 @@ async function sendAiChat(message, scope = "page") {
     const toolHint = (response.tool_runs || []).length
       ? `\n\n${state.lang === "zh" ? "工具证据摘要" : "Tool evidence"}：${(response.tool_runs || []).map((tool) => tool.name).join("、")}`
       : "";
-    assistant.messages.push({ role: "assistant", content: `${response.message || t("ai.chatFallback")}${toolHint}`, time: currentTimeLabel(), meta: { workflow: response.workflow } });
+    assistant.messages.push({
+      role: "assistant",
+      content: `${response.message || t("ai.chatFallback")}${toolHint}`,
+      time: currentTimeLabel(),
+      meta: {
+        workflow: response.workflow,
+        status: response.status,
+        data_context: response.data_context,
+        issues: response.issues,
+        summary: response.summary,
+      },
+    });
     if (scope === "page") await loadAiChatSessions();
   } catch (err) {
     assistant.messages.push({ role: "assistant", content: `${t("ai.sendFailed")}：${friendlyError(err.message)}`, time: currentTimeLabel() });
@@ -6066,7 +6310,7 @@ function deleteEndpoint(scope, id) {
     users: `/api/users/${id}`,
     roles: `/api/roles/${id}`,
     tasks: `/api/tasks/${id}`,
-    reports: `/api/tasks/${id}`,
+    reports: `/api/reports/${id}`,
     issues: `/api/issues/${id}`,
     applications: `/api/applications/${id}`,
     "discovered-services": `/api/discovered-services/${id}`,
@@ -6513,6 +6757,28 @@ document.addEventListener("click", async (event) => {
       render();
     } else if (action === "delete-selected") {
       await deleteSelected(target.dataset.scope);
+    } else if (action === "toggle-filter-panel") {
+      toggleFilterPanel(target.dataset.scope);
+      render();
+    } else if (action === "toggle-filter-submenu") {
+      toggleFilterSubmenu(target.dataset.scope, target.dataset.name);
+      render();
+    } else if (action === "set-task-filter") {
+      state.taskFilters[target.dataset.name] = target.dataset.value;
+      resetPage("tasks");
+      render();
+    } else if (action === "set-issue-filter") {
+      state.issueFilters[target.dataset.name] = target.dataset.value;
+      resetPage("issues");
+      render();
+    } else if (action === "set-resource-filter") {
+      state.resourceFilters[target.dataset.name] = target.dataset.value;
+      resetPage("resources");
+      render();
+    } else if (action === "set-report-filter") {
+      state.reportFilters[target.dataset.name] = target.dataset.value;
+      resetPage("reports");
+      render();
     } else if (action === "confirm-delete") {
       await performDeleteSelected();
     } else if (action === "bulk-resolve-issues") {
@@ -6720,6 +6986,9 @@ document.addEventListener("click", async (event) => {
     } else if (action === "start-task") {
       await api(`/api/tasks/${encodeURIComponent(target.dataset.id)}/start`, { method: "POST" });
       await refreshData(t("toast.taskQueued"));
+    } else if (action === "rerun-task") {
+      await api(`/api/tasks/${encodeURIComponent(target.dataset.id)}/rerun`, { method: "POST" });
+      await refreshData(state.lang === "zh" ? "任务已重新执行" : "Task re-execution started");
     } else if (action === "view-task-report") {
       const task = (state.data.tasks || []).find((item) => item.id === target.dataset.id);
       state.view = "reports";
@@ -6743,6 +7012,9 @@ document.addEventListener("click", async (event) => {
       render();
     } else if (action === "export-report") {
       await exportReport(target.dataset.id, target.dataset.format);
+    } else if (action === "delete-report") {
+      state.modal = { type: "delete-confirm", scope: "reports", ids: [target.dataset.id] };
+      render();
     } else if (action === "export-merged") {
       if (!selectionSet("reports").size) {
         toast(t("toast.selectReport"), "error");

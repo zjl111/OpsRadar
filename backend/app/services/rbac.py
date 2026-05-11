@@ -28,6 +28,7 @@ ALL_PERMISSIONS = [
     "tasks:cancel",
     "reports:read",
     "reports:export",
+    "reports:delete",
     "issues:read",
     "issues:update",
     "repair_tasks:read",

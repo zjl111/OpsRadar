@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 import ssl
+from pathlib import Path
 from datetime import datetime, time, timedelta, timezone
 from typing import Annotated
 from urllib import request as urllib_request
@@ -92,7 +94,9 @@ from backend.app.services.ai_actions import (
     execute_action,
     execute_workflow_action,
     handle_workflow_event,
+    issue_list_payload,
     list_actions,
+    platform_summary,
     workflow_payload,
 )
 from backend.app.services.inspection_engine import create_manual_task
@@ -717,8 +721,9 @@ def dashboard_payload(db: Session) -> dict:
     open_issues = db.query(Issue).filter(Issue.status == "open").count()
     severe_issues = db.query(Issue).filter(Issue.severity.in_(["critical", "high"])).count()
     resolved_issues = db.query(Issue).filter(Issue.status == "resolved").count()
-    online_resources = db.query(Resource).filter(Resource.status == "online").count()
-    resources = db.query(Resource).count()
+    entity_resource_filter = Resource.extra_params["parent_resource_id"].as_string().is_(None)
+    online_resources = db.query(Resource).filter(entity_resource_filter, Resource.status == "online").count()
+    resources = db.query(Resource).filter(entity_resource_filter).count()
     today = datetime.now(timezone.utc).date()
     week_start = datetime.combine(today - timedelta(days=6), time.min, tzinfo=timezone.utc)
     week_report_tasks = (
@@ -823,7 +828,7 @@ def public_site_settings(db: Annotated[Session, Depends(get_db)]) -> dict:
     data["public_metrics"] = {
         "applications": db.query(Application).count(),
         "environments": db.query(AppEnvironment).count(),
-        "managed_resources": db.query(Resource).count(),
+        "managed_resources": db.query(Resource).filter(Resource.extra_params["parent_resource_id"].as_string().is_(None)).count(),
         "audit_events": db.query(AuditLog).count(),
     }
     return data
@@ -889,24 +894,35 @@ def environment_name_for_type(env_type: str) -> str:
 @router.post("/applications")
 def create_application(payload: ApplicationPayload, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(require_user)]) -> dict:
     require_permission(db, user, "applications:create")
-    if db.query(Application).filter(Application.name == payload.name).first():
-        raise HTTPException(status_code=409, detail="Application already exists")
     values = payload.model_dump()
     env_type = values.pop("env_type", "prod")
-    app = Application(**values)
-    db.add(app)
-    db.flush()
+    env_name = environment_name_for_type(env_type)
+    app = db.query(Application).filter(Application.name == values["name"]).one_or_none()
+    action = "create_application"
+    if not app:
+        app = Application(**values)
+        db.add(app)
+        db.flush()
+    else:
+        action = "create_application_environment"
+    existing_env = (
+        db.query(AppEnvironment)
+        .filter(AppEnvironment.application_id == app.id, AppEnvironment.name == env_name, AppEnvironment.env_type == env_type)
+        .one_or_none()
+    )
+    if existing_env:
+        raise HTTPException(status_code=409, detail=f"{app.name} / {env_name} already exists")
     db.add(
         AppEnvironment(
             application_id=app.id,
-            name=environment_name_for_type(env_type),
+            name=env_name,
             env_type=env_type,
             owner=app.owner,
-            description=app.description or f"{app.name} 默认{environment_name_for_type(env_type)}",
+            description=app.description or f"{app.name} 默认{env_name}",
             status=app.status,
         )
     )
-    db.add(AuditLog(actor=user.display_name, action="create_application", target=app.name, detail=app.owner))
+    db.add(AuditLog(actor=user.display_name, action=action, target=app.name, detail=env_name))
     db.commit()
     db.refresh(app)
     return application_payload(app)
@@ -1466,6 +1482,19 @@ def _chat_session_payload(session: AiChatSession, db: Session) -> dict:
     return data
 
 
+def _remove_report_artifacts(report: InspectionReport | None, task: Task | None = None) -> None:
+    paths = []
+    if report:
+        paths.extend([report.html_path, report.docx_path, report.pdf_path])
+    if task and task.report_path:
+        paths.append(task.report_path)
+    for raw_path in paths:
+        if not raw_path:
+            continue
+        path = Path(raw_path)
+        path.unlink(missing_ok=True)
+
+
 @router.get("/ai/chat/sessions")
 def list_ai_chat_sessions(
     db: Annotated[Session, Depends(get_db)],
@@ -1687,6 +1716,8 @@ def _is_opsradar_domain_message(message: str) -> bool:
         "poem",
         "translate",
     ]
+    if any(keyword in text for keyword in denied_keywords):
+        return False
     allowed_keywords = [
         "opsradar",
         "巡检",
@@ -1720,6 +1751,7 @@ def _is_opsradar_domain_message(message: str) -> bool:
         "mysql",
         "postgres",
         "pgsql",
+        "sqlserver",
         "jumpserver",
         "itdevops",
         "prometheus",
@@ -1728,6 +1760,16 @@ def _is_opsradar_domain_message(message: str) -> bool:
         "diagnose",
         "root cause",
         "inspection",
+        "system load",
+        "load breakdown",
+        "service status",
+        "systemd status",
+        "cpu",
+        "memory",
+        "disk",
+        "inode",
+        "network",
+        "latency",
         "你好",
         "hello",
         "hi",
@@ -1741,10 +1783,44 @@ def _is_opsradar_domain_message(message: str) -> bool:
         "帮我创建",
         "帮我分析",
         "帮我排查",
+        "system负载",
+        "系统负载",
+        "服务状态",
+        "状态检查",
+        "负载拆解",
+        "端口",
+        "连接",
+        "日志分析",
+        "根因分析",
     ]
-    if any(keyword in text for keyword in denied_keywords) and not any(keyword in text for keyword in allowed_keywords):
-        return False
-    return any(keyword in text for keyword in allowed_keywords)
+    if any(keyword in text for keyword in allowed_keywords):
+        return True
+    diagnostic_terms = [
+        "检查",
+        "诊断",
+        "排障",
+        "分析",
+        "查看",
+        "定位",
+        "systemd",
+        "docker",
+        "compose",
+        "redis",
+        "mysql",
+        "postgres",
+        "pgsql",
+        "system",
+        "load",
+        "cpu",
+        "memory",
+        "disk",
+        "inode",
+        "service",
+        "status",
+        "日志",
+        "监控",
+    ]
+    return any(keyword in text for keyword in diagnostic_terms)
 
 
 def _out_of_scope_reply() -> str:
@@ -1785,7 +1861,159 @@ def _workflow_reply(workflow: dict) -> str | None:
         return "巡检任务已进入执行队列。我会基于任务状态继续推进报告生成和问题同步。"
     if state == "DONE":
         return "巡检闭环已完成。你可以继续查看报告、查看问题列表、生成修复建议或创建修复任务。"
+    if workflow.get("intent") in {"query_issues", "query_platform_summary"}:
+        return None
     return "请按下面的工作流步骤确认下一步。"
+
+
+def _workflow_data_context(workflow: dict, fallback: dict) -> dict:
+    context = workflow.get("context") or {}
+    target = workflow.get("target") or {}
+    data = {
+        "workflow_state": workflow.get("state"),
+        "target_application": target.get("application_name") or "",
+        "target_environment": target.get("env_label") or "",
+    }
+    if context.get("environment_id") or context.get("candidate_environment_id"):
+        data["matched_environments"] = 1
+    elif workflow.get("state") == "WAITING_ENV_CREATE":
+        data["matched_environments"] = 0
+    resource_ids = context.get("resource_ids") or []
+    if resource_ids:
+        data["matched_assets"] = len(resource_ids)
+    elif workflow.get("state") in {"WAITING_ASSET_CREATE", "WAITING_ENV_CREATE"}:
+        data["matched_assets"] = 0
+    if "issues" in fallback:
+        data["issues"] = fallback["issues"]
+    return data
+
+
+def _direct_action_reply(message: str, data_context: dict, db: Session) -> tuple[str, str, dict] | None:
+    text = (message or "").lower()
+    ip_match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", message or "")
+    asset_keywords = [
+        "资产",
+        "主机",
+        "服务器",
+        "机器",
+        "节点",
+        "问题",
+        "异常",
+        "分析",
+        "排查",
+        "巡检",
+        "日志",
+        "监控",
+        "resource",
+        "asset",
+        "host",
+        "server",
+    ]
+    if ip_match and any(keyword in text or keyword in message for keyword in asset_keywords):
+        ip = ip_match.group(0)
+        resource = (
+            db.query(Resource)
+            .filter(or_(Resource.ip == ip, Resource.name == ip, Resource.name.ilike(f"%{ip}%")))
+            .order_by(Resource.created_at.desc())
+            .first()
+        )
+        if not resource:
+            reply = (
+                f"未找到资产 {ip}，不能基于不存在的资产做巡检、问题分析或根因判断。\n\n"
+                "请先在「资源」中添加该资产，或选择一个已纳管资产后再继续。"
+                "如果你的目标是创建巡检任务，我会在资产补齐后继续原流程。\n\n"
+                "来源：OpsRadar 资产列表"
+            )
+            return reply, "action:list_assets", {"data_context": {"resources": 0, "matched_assets": 0, "query": ip}}
+        issues = (
+            db.query(Issue)
+            .filter(Issue.resource_id == resource.id)
+            .order_by(Issue.created_at.desc())
+            .limit(5)
+            .all()
+        )
+        bindings = list(resource.environment_bindings or [])
+        environment_names = [
+            f"{binding.environment.application.name if binding.environment and binding.environment.application else '-'} / {binding.environment.name}"
+            for binding in bindings
+            if binding.environment
+        ]
+        lines = [
+            f"已找到资产 {resource.name}（{resource.ip}:{resource.port}）。",
+            f"- 类型：{resource.type}",
+            f"- 状态：{resource.status}",
+            f"- 所属应用环境：{ '、'.join(environment_names) if environment_names else '未绑定' }",
+        ]
+        if not issues:
+            lines.extend(
+                [
+                    "",
+                    "当前该资产没有问题记录，因此不能生成真实根因分析或修复建议。",
+                    "请先创建并执行巡检任务，或从巡检结果同步问题后再分析。",
+                ]
+            )
+        else:
+            lines.append("")
+            lines.append("最近问题：")
+            for issue in issues:
+                lines.append(f"- {issue.summary}（{issue.severity} / {issue.status}）")
+        lines.extend(["", "来源：OpsRadar 资产列表 / 问题列表"])
+        return "\n".join(lines), "action:list_assets", {
+            "data_context": {
+                "resources": 1,
+                "matched_assets": 1,
+                "issues": len(issues),
+                "query": ip,
+            }
+        }
+
+    asks_issues = any(keyword in message for keyword in ["多少问题", "几个问题", "问题数量", "当前问题", "现在问题", "问题列表", "有多少异常", "多少异常"]) or any(keyword in text for keyword in ["how many issues", "issue count", "list issues", "current issues"])
+    asks_issue_analysis = any(keyword in message for keyword in ["分析当前异常", "分析当前问题", "分析问题", "分析异常", "根因定位", "生成修复建议", "修复建议"]) or any(keyword in text for keyword in ["analyze issue", "root cause", "repair suggestion"])
+    if asks_issues:
+        data = issue_list_payload(db, 10)
+        lines = [
+            f"当前问题中心共有 {data['total']} 个问题，待处理 {data['open']} 个。",
+            "",
+            "来源：OpsRadar 问题列表",
+        ]
+        if data["items"]:
+            lines.append("")
+            lines.append("最近问题：")
+            for item in data["items"][:5]:
+                lines.append(f"- {item['summary']}（{item['severity']} / {item['status']}）")
+        return "\n".join(lines), "action:list_issues", {"issues": data, "data_context": data_context}
+    if asks_issue_analysis:
+        data = issue_list_payload(db, 10)
+        if data["total"] == 0:
+            reply = (
+                "当前问题中心共有 0 个问题，因此没有可分析的异常，也不能生成修复建议。\n\n"
+                "请先执行巡检任务，或从巡检结果同步问题后再进行根因分析。\n\n"
+                "来源：OpsRadar 问题列表"
+            )
+            return reply, "action:list_issues", {"issues": data, "data_context": data_context}
+        reply = (
+            f"当前问题中心共有 {data['total']} 个问题，待处理 {data['open']} 个。\n"
+            "请选择一个具体问题进入详情后执行 AI 根因分析，或让我基于最近问题生成修复建议。\n\n"
+            "最近问题：\n"
+            + "\n".join(f"- {item['summary']}（{item['severity']} / {item['status']}）" for item in data["items"][:5])
+            + "\n\n来源：OpsRadar 问题列表"
+        )
+        return reply, "action:list_issues", {"issues": data, "data_context": data_context}
+
+    asks_summary = any(keyword in message for keyword in ["平台概况", "系统概况", "当前数据", "统计", "多少资产", "多少任务", "多少报告"]) or any(keyword in text for keyword in ["summary", "overview", "how many assets", "how many tasks"])
+    if asks_summary:
+        data = platform_summary(db)
+        reply = (
+            "当前 OpsRadar 平台数据：\n"
+            f"- 应用环境：{data['environments']} 个\n"
+            f"- 资产：{data['resources']} 个，在线 {data['online_resources']} 个\n"
+            f"- 巡检任务：{data['tasks']} 个，运行中/排队 {data['running_tasks']} 个\n"
+            f"- 巡检报告：{data['reports']} 个\n"
+            f"- 问题：{data['issues']} 个，待处理 {data['open_issues']} 个\n\n"
+            "来源：OpsRadar 平台统计"
+        )
+        return reply, "action:get_platform_summary", {"summary": data, "data_context": data_context}
+    return None
 
 
 @router.post("/ai/chat")
@@ -1818,13 +2046,20 @@ def ai_chat(payload: AiChatPayload, db: Annotated[Session, Depends(get_db)], use
         db.add(AiChatMessage(session_id=session.id, role="assistant", content=out_of_scope_reply, meta={"status": "out_of_scope", "data_context": data_context, "tool_runs": [], "evidence": []}))
         db.commit()
         return {"session_id": session.id, "message": out_of_scope_reply, "status": "out_of_scope", "tool_runs": [], "evidence": [], "data_context": data_context}
+    direct = _direct_action_reply(payload.message, data_context, db)
+    if direct:
+        assistant_message, status, meta = direct
+        db.add(AiChatMessage(session_id=session.id, role="assistant", content=assistant_message, meta={"status": status, **meta, "tool_runs": [], "evidence": []}))
+        db.commit()
+        return {"session_id": session.id, "message": assistant_message, "status": status, "tool_runs": [], "evidence": [], **meta}
     workflow_preview = build_workflow(db, payload.message, payload.context)
     workflow = create_workflow(db, user, session.id, payload.message, payload.context) if workflow_preview.get("intent") != "opsradar_qna" else workflow_preview
     workflow_reply = _workflow_reply(workflow)
     if workflow_reply:
-        db.add(AiChatMessage(session_id=session.id, role="assistant", content=workflow_reply, meta={"status": "workflow_ready", "data_context": data_context, "tool_runs": [], "evidence": [], "workflow": workflow}))
+        workflow_context = _workflow_data_context(workflow, data_context)
+        db.add(AiChatMessage(session_id=session.id, role="assistant", content=workflow_reply, meta={"status": "workflow_ready", "data_context": workflow_context, "tool_runs": [], "evidence": [], "workflow": workflow}))
         db.commit()
-        return {"session_id": session.id, "message": workflow_reply, "status": "workflow_ready", "tool_runs": [], "evidence": [], "data_context": data_context, "workflow": workflow}
+        return {"session_id": session.id, "message": workflow_reply, "status": "workflow_ready", "tool_runs": [], "evidence": [], "data_context": workflow_context, "workflow": workflow}
     empty_reply = _empty_context_reply(payload.message, data_context)
     if empty_reply:
         db.add(AiChatMessage(session_id=session.id, role="assistant", content=empty_reply, meta={"status": "empty_context", "data_context": data_context, "tool_runs": [], "evidence": [], "workflow": workflow}))
@@ -2395,6 +2630,41 @@ def enqueue_task(db: Session, task: Task, user: User) -> Task:
     return task
 
 
+def rebuild_task_results(
+    db: Session,
+    task: Task,
+    resource_ids: list[str],
+    item_ids: list[str],
+    resource_item_ids: dict[str, list[str]],
+) -> int:
+    db.query(TaskResult).filter(TaskResult.task_id == task.id).delete(synchronize_session=False)
+    db.flush()
+    resources = db.query(Resource).filter(Resource.id.in_(resource_ids)).all()
+    items = db.query(InspectionItem).filter(InspectionItem.id.in_(item_ids)).all()
+    items_by_id = {item.id: item for item in items}
+    total = 0
+    from backend.app.services.inspection_engine import _compatible, _item_snapshot
+
+    for resource in resources:
+        for item_id in resource_item_ids.get(resource.id, []):
+            item = items_by_id.get(item_id)
+            if not item or not _compatible(resource, item):
+                continue
+            db.add(
+                TaskResult(
+                    task_id=task.id,
+                    resource_id=resource.id,
+                    item_id=item.id,
+                    resource_snapshot=resource_snapshot_for_task(db, resource, item, task.environment_id),
+                    item_snapshot=_item_snapshot(item, resource),
+                    status="pending",
+                )
+            )
+            total += 1
+    task.summary = {"total": total, "success": 0, "fail": 0, "exception": 0}
+    return total
+
+
 @router.post("/tasks")
 def create_configured_task(
     payload: TaskCreateRequest,
@@ -2479,23 +2749,7 @@ def update_task(
         payload.environment_id,
     )
     if task.status in {"pending", "queued"}:
-        db.query(TaskResult).filter(TaskResult.task_id == task.id).delete(synchronize_session=False)
-        db.flush()
-        resources = db.query(Resource).filter(Resource.id.in_(resource_ids)).all()
-        items = db.query(InspectionItem).filter(InspectionItem.id.in_(item_ids)).all()
-        items_by_id = {item.id: item for item in items}
-        total = 0
-        from backend.app.services.inspection_engine import _compatible, _item_snapshot
-        for resource in resources:
-            for item_id in resource_item_ids.get(resource.id, []):
-                item = items_by_id.get(item_id)
-                if not item:
-                    continue
-                if not _compatible(resource, item):
-                    continue
-                db.add(TaskResult(task_id=task.id, resource_id=resource.id, item_id=item.id, resource_snapshot=resource_snapshot_for_task(db, resource, item, payload.environment_id), item_snapshot=_item_snapshot(item, resource), status="pending"))
-                total += 1
-        task.summary = {"total": total, "success": 0, "fail": 0, "exception": 0}
+        total = rebuild_task_results(db, task, resource_ids, item_ids, resource_item_ids)
         db.add(TaskLog(task_id=task.id, level="info", message=f"Task configuration updated with {total} executable check items."))
     db.add(AuditLog(actor=user.display_name, action="update_task", target=task.name, detail=task.id))
     db.commit()
@@ -2515,6 +2769,77 @@ def start_task(
         raise HTTPException(status_code=404, detail="Task not found")
     task = enqueue_task(db, task, user)
     return task_payload(task, include_results=True, include_logs=True)
+
+
+def _task_rerun_selection(task: Task) -> tuple[list[str], list[str], dict[str, list[str]]]:
+    config = dict(task.config or {})
+    resource_ids = [str(item) for item in (config.get("resource_ids") or []) if item]
+    item_ids = [str(item) for item in (config.get("item_ids") or []) if item]
+    resource_item_ids = {
+        str(resource_id): [str(item_id) for item_id in item_list if item_id]
+        for resource_id, item_list in (config.get("resource_item_ids") or {}).items()
+    }
+    if resource_ids and item_ids and resource_item_ids:
+        return resource_ids, item_ids, resource_item_ids
+
+    resource_item_ids = {}
+    for result in task.results:
+        if not result.resource_id or not result.item_id:
+            continue
+        resource_item_ids.setdefault(result.resource_id, []).append(result.item_id)
+    resource_ids = sorted(resource_item_ids)
+    item_ids = sorted({item_id for ids in resource_item_ids.values() for item_id in ids})
+    resource_item_ids = {resource_id: sorted(set(ids)) for resource_id, ids in resource_item_ids.items()}
+    return resource_ids, item_ids, resource_item_ids
+
+
+@router.post("/tasks/{task_id}/rerun")
+def rerun_task(
+    task_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_user)],
+) -> dict:
+    require_permission(db, user, "tasks:create")
+    source = db.get(Task, task_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if source.status in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail=f"Task cannot be rerun from status {source.status}")
+    resource_ids, item_ids, resource_item_ids = _task_rerun_selection(source)
+    if not resource_ids or not item_ids:
+        raise HTTPException(status_code=422, detail="Task has no reusable inspection scope")
+    config = dict(source.config or {})
+    config.update(
+        {
+            "last_rerun_at": datetime.now(timezone.utc).isoformat(),
+            "resource_ids": resource_ids,
+            "item_ids": item_ids,
+            "resource_item_ids": resource_item_ids,
+        }
+    )
+    report_ids = [row[0] for row in db.query(InspectionReport.id).filter(InspectionReport.task_id == source.id).all()]
+    result_ids = [row[0] for row in db.query(TaskResult.id).filter(TaskResult.task_id == source.id).all()]
+    if report_ids:
+        db.query(Issue).filter(Issue.report_id.in_(report_ids)).delete(synchronize_session=False)
+        reports = db.query(InspectionReport).filter(InspectionReport.id.in_(report_ids)).all()
+        for report in reports:
+            _remove_report_artifacts(report)
+            db.delete(report)
+    if result_ids:
+        db.query(Issue).filter(Issue.task_result_id.in_(result_ids)).delete(synchronize_session=False)
+    source.config = config
+    source.status = "pending"
+    source.cancel_requested = False
+    source.started_at = None
+    source.finished_at = None
+    source.report_path = ""
+    total = rebuild_task_results(db, source, resource_ids, item_ids, resource_item_ids)
+    db.add(TaskLog(task_id=source.id, level="info", message=f"Task prepared for re-execution with {total} executable check items."))
+    db.add(AuditLog(actor=user.display_name, action="rerun_task", target=source.name, detail=f"reuse {source.id}"))
+    db.commit()
+    db.refresh(source)
+    source = enqueue_task(db, source, user)
+    return {"task": task_payload(source, include_results=True, include_logs=True)}
 
 
 @router.post("/tasks/{task_id}/cancel")
@@ -2802,6 +3127,43 @@ def download_report(
     require_permission(db, _, "reports:export")
     path, media_type, filename = export_report(db, [task_id], fmt)
     return FileResponse(path, media_type=media_type, filename=filename)
+
+
+@router.delete("/reports/{task_id}")
+def delete_report(
+    task_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_user)],
+) -> dict:
+    require_permission(db, user, "reports:delete")
+    task = db.get(Task, task_id)
+    reports = (
+        db.query(InspectionReport)
+        .filter(or_(InspectionReport.task_id == task_id, InspectionReport.id == task_id))
+        .all()
+    )
+    if reports and not task and reports[0].task_id:
+        task = db.get(Task, reports[0].task_id)
+    if not task and not reports:
+        raise HTTPException(status_code=404, detail="Report not found")
+    report_ids = [report.id for report in reports]
+    task_ids = [value for value in {task.id if task else None, *(report.task_id for report in reports)} if value]
+    issue_filters = []
+    if task_ids:
+        issue_filters.append(Issue.task_id.in_(task_ids))
+    if report_ids:
+        issue_filters.append(Issue.report_id.in_(report_ids))
+    issues = db.query(Issue).filter(or_(*issue_filters)).all() if issue_filters else []
+    for issue in issues:
+        db.delete(issue)
+    for report in reports:
+        _remove_report_artifacts(report, task)
+        db.delete(report)
+    if task:
+        task.report_path = ""
+    db.add(AuditLog(actor=user.display_name, action="delete_report", target=task.name if task else task_id, detail=f"reports={len(reports)}, issues={len(issues)}"))
+    db.commit()
+    return {"ok": True, "deleted_reports": len(reports), "deleted_issues": len(issues)}
 
 
 @router.get("/reports")

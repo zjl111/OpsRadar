@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import re
 from typing import Any, Callable
 
 from fastapi import HTTPException
@@ -66,6 +67,8 @@ class ActionSpec:
 
 
 ACTION_SPECS = {
+    "get_platform_summary": ActionSpec("get_platform_summary", "ai_assistant:read", "查询平台真实统计"),
+    "list_issues": ActionSpec("list_issues", "issues:read", "查询问题列表"),
     "list_environments": ActionSpec("list_environments", "environments:read", "查询应用环境"),
     "list_assets": ActionSpec("list_assets", "resources:read", "查询资产"),
     "create_asset": ActionSpec("create_asset", "resources:create", "创建资产", True),
@@ -101,6 +104,13 @@ ENV_TYPE_LABELS = {
 }
 
 
+def _normalize_name(value: str) -> str:
+    text = (value or "").lower()
+    text = re.sub(r"(环境|系统|平台|集群|应用|服务)", "", text)
+    text = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", text)
+    return text
+
+
 def list_actions() -> list[dict]:
     return [
         {
@@ -131,24 +141,27 @@ def _resource_payload(resource: Resource) -> dict:
 
 def _requested_application_name(message: str, envs: list[AppEnvironment]) -> str:
     text = (message or "").lower()
+    normalized_message = _normalize_name(message)
     known_aliases = {
         "jumpserver": "JumpServer",
         "jms": "JumpServer",
         "itdevops": "ITDevOps",
+        "itdevops环境": "ITDevOps 环境",
     }
     for alias, name in known_aliases.items():
-        if alias in text:
+        if alias in text or _normalize_name(alias) in normalized_message:
             return name
     for env in envs:
         app_name = env.application.name if env.application else ""
-        if app_name and app_name.lower() in text:
+        normalized_app = _normalize_name(app_name)
+        if app_name and (app_name.lower() in text or normalized_app and normalized_app in normalized_message):
             return app_name
     return ""
 
 
 def _requested_env_type(message: str) -> str:
     text = (message or "").lower()
-    if any(keyword in message for keyword in ["生产", "正式"]) or "prod" in text:
+    if any(keyword in message for keyword in ["生产", "生成", "正式"]) or "prod" in text:
         return "prod"
     if "uat" in text:
         return "uat"
@@ -163,6 +176,10 @@ def _requested_env_type(message: str) -> str:
 
 def _detect_intent(message: str) -> str:
     text = (message or "").lower()
+    if any(keyword in message for keyword in ["多少问题", "几个问题", "问题数量", "当前问题", "现在问题", "有多少异常", "多少异常"]) or any(keyword in text for keyword in ["how many issues", "issue count", "list issues"]):
+        return "query_issues"
+    if any(keyword in message for keyword in ["平台概况", "系统概况", "当前数据", "统计", "多少资产", "多少任务", "多少报告"]) or any(keyword in text for keyword in ["summary", "overview", "how many assets", "how many tasks"]):
+        return "query_platform_summary"
     if any(keyword in message for keyword in ["修复建议", "处理建议"]) or "repair suggestion" in text:
         return "generate_repair_suggestion"
     if any(keyword in message for keyword in ["创建修复任务", "生成修复任务"]):
@@ -182,15 +199,27 @@ def _detect_intent(message: str) -> str:
     return "opsradar_qna"
 
 
+def _is_inspection_intent(intent: str) -> bool:
+    return intent == "create_and_run_inspection"
+
+
 def _match_environment(message: str, envs: list[AppEnvironment]) -> tuple[AppEnvironment | None, str, str]:
     text = (message or "").lower()
+    normalized_message = _normalize_name(message)
     requested_app = _requested_application_name(message, envs)
     requested_env_type = _requested_env_type(message)
     if requested_app:
+        normalized_requested_app = _normalize_name(requested_app)
         candidates = [
             env
             for env in envs
-            if env.application and requested_app.lower() == env.application.name.lower()
+            if env.application
+            and (
+                requested_app.lower() == env.application.name.lower()
+                or normalized_requested_app == _normalize_name(env.application.name)
+                or normalized_requested_app in _normalize_name(env.application.name)
+                or _normalize_name(env.application.name) in normalized_requested_app
+            )
         ]
         if requested_env_type:
             candidates = [
@@ -205,9 +234,10 @@ def _match_environment(message: str, envs: list[AppEnvironment]) -> tuple[AppEnv
         for env in envs
         if env.name.lower() in text
         or (env.application and env.application.name.lower() in text)
+        or (env.application and _normalize_name(env.application.name) in normalized_message)
     ]
-    if not candidates and requested_env_type:
-        candidates = [env for env in envs if env.env_type == requested_env_type]
+    # For create/run inspection, matching by environment type alone is unsafe:
+    # "生产环境 JumpServer" must not silently bind to ITDevOps / prod.
     return (candidates[0] if candidates else None, "", requested_env_type)
 
 
@@ -1001,6 +1031,48 @@ def _action_result(
     return payload
 
 
+def platform_summary(db: Session) -> dict:
+    return {
+        "applications": db.query(AppEnvironment.application_id).distinct().count(),
+        "environments": db.query(AppEnvironment).count(),
+        "resources": db.query(Resource).count(),
+        "online_resources": db.query(Resource).filter(Resource.status == "online").count(),
+        "tasks": db.query(Task).count(),
+        "running_tasks": db.query(Task).filter(Task.status.in_(["pending", "queued", "running"])).count(),
+        "reports": db.query(InspectionReport).count(),
+        "issues": db.query(Issue).count(),
+        "open_issues": db.query(Issue).filter(Issue.status == "open").count(),
+        "resolved_issues": db.query(Issue).filter(Issue.status == "resolved").count(),
+        "critical_issues": db.query(Issue).filter(Issue.severity == "critical").count(),
+        "high_issues": db.query(Issue).filter(Issue.severity == "high").count(),
+    }
+
+
+def issue_list_payload(db: Session, limit: int = 20) -> dict:
+    items = (
+        db.query(Issue)
+        .order_by(Issue.created_at.desc())
+        .limit(max(1, min(limit, 100)))
+        .all()
+    )
+    return {
+        "total": db.query(Issue).count(),
+        "open": db.query(Issue).filter(Issue.status == "open").count(),
+        "items": [
+            {
+                "id": issue.id,
+                "summary": issue.summary,
+                "severity": issue.severity,
+                "status": issue.status,
+                "resource_id": issue.resource_id,
+                "task_id": issue.task_id,
+                "created_at": issue.created_at.isoformat() if issue.created_at else None,
+            }
+            for issue in items
+        ],
+    }
+
+
 async def execute_action(db: Session, user: User, action_name: str, params: dict, confirmed: bool, has_permission: Callable[[str], bool]) -> dict:
     spec = ACTION_SPECS.get(action_name)
     if not spec:
@@ -1025,6 +1097,11 @@ async def execute_action(db: Session, user: User, action_name: str, params: dict
 
 
 async def _execute_registered_action(db: Session, user: User, action_name: str, params: dict) -> dict:
+    if action_name == "get_platform_summary":
+        return _action_result("success", "平台统计查询完成", platform_summary(db), next_state="DATA_RETURNED")
+    if action_name == "list_issues":
+        data = issue_list_payload(db, int(params.get("limit") or 20))
+        return _action_result("success", f"问题查询完成：共 {data['total']} 个问题，待处理 {data['open']} 个", data, next_state="DATA_RETURNED")
     if action_name == "list_environments":
         return _action_result("success", "应用环境查询完成", {"items": [_env_payload(item) for item in db.query(AppEnvironment).order_by(AppEnvironment.created_at.desc()).all()]})
     if action_name == "list_assets":

@@ -2381,6 +2381,7 @@ button {
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
+  position: relative;
 }
 
 .table-toolbar.compact.with-extra .table-toolbar-actions {
@@ -2397,11 +2398,60 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 10px;
+  padding: 0 12px 0 14px;
+  position: relative;
 }
 
 .table-search:focus-within {
   border-color: color-mix(in srgb, var(--brand) 48%, var(--line));
+}
+
+.table-search.search-right-icon {
+  padding-right: 42px;
+}
+
+.table-search.search-with-toggle {
+  padding-left: 6px;
+}
+
+.filter-toggle-inline {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  margin: 0 2px 0 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+}
+
+.filter-toggle-inline:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-2) 78%, transparent);
+}
+
+.filter-toggle-inline.active {
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 9%, transparent);
+}
+
+.table-search.search-with-toggle input {
+  padding-left: 2px;
+}
+
+.table-search.search-right-icon > .icon {
+  position: absolute;
+  right: 12px;
+  pointer-events: none;
+}
+
+.table-search.search-right-icon input {
+  flex: 1;
+  min-width: 0;
+  padding-right: 2px;
 }
 
 .table-toolbar.compact.with-extra .table-search {
@@ -2719,7 +2769,16 @@ button {
 
 .task-main-panel {
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
+}
+
+.task-center-shell,
+.panel.task-main-panel,
+.module-pane,
+.problem-page-panel,
+.bare-page-panel {
+  overflow: visible;
 }
 
 .task-filter-bar {
@@ -2729,29 +2788,177 @@ button {
   background: var(--surface);
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 12px;
   flex-wrap: wrap;
+  position: relative;
 }
 
-.task-filter {
+.task-filter-bar .task-search,
+.problem-filter-bar .problem-search,
+.table-toolbar-actions .table-search.search-with-toggle {
+  width: 360px;
+  min-width: 360px;
+  max-width: 360px;
+}
+
+.search-filter-anchor {
+  position: relative;
+  flex: 0 0 360px;
+  width: 360px;
+  min-width: 360px;
+  max-width: 360px;
+}
+
+.search-filter-anchor .table-search {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+.task-filter-panel,
+.problem-filter-panel,
+.resource-filter-panel,
+.report-filter-panel {
   display: grid;
-  gap: 7px;
+  gap: 0;
+  width: min(112px, calc(100vw - 48px));
+  max-height: min(360px, calc(100vh - 220px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.11);
+  z-index: 80;
 }
 
-.filter-select.task-filter,
-.filter-select.issue-filter {
-  display: inline-flex;
-  gap: 16px;
+.task-filter-panel.collapsed,
+.problem-filter-panel.collapsed,
+.resource-filter-panel.collapsed,
+.report-filter-panel.collapsed {
+  display: none;
 }
 
-.issue-filter .compact-select {
-  min-width: 118px;
+.task-filter-panel {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
 }
 
-.task-filter > span {
+.problem-filter-panel {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+}
+
+.resource-filter-panel,
+.report-filter-panel {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+}
+
+.filter-menu-item + .filter-menu-item {
+  border-top: 1px solid var(--line);
+}
+
+.filter-menu-item {
+  position: relative;
+}
+
+.filter-menu-head {
+  width: 100%;
+  min-height: 28px;
+  padding: 0 7px 0 9px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+}
+
+.filter-menu-head span {
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.filter-menu-head .icon {
+  width: 13px;
+  height: 13px;
+  color: var(--muted);
+}
+
+.filter-menu-head:hover {
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+}
+
+.filter-menu-options {
+  display: none;
+  padding: 0 8px 8px 26px;
+  gap: 3px;
+  position: relative;
+}
+
+.filter-menu-item.open .filter-menu-options {
+  display: grid;
+}
+
+.filter-menu-options::before {
+  content: "";
+  position: absolute;
+  left: 17px;
+  top: 2px;
+  bottom: 16px;
+  width: 1px;
+  background: var(--line);
+}
+
+.filter-menu-options button {
+  min-height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--text-soft);
   font-size: 12px;
-  font-weight: 850;
+  font-weight: 500;
+  text-align: left;
+  position: relative;
+}
+
+.filter-menu-options button::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+  background: color-mix(in srgb, var(--line) 80%, var(--muted));
+}
+
+.filter-menu-options button:hover,
+.filter-menu-options button.active {
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 9%, transparent);
+}
+
+.filter-menu-options button.active::after {
+  content: "";
+  position: absolute;
+  left: -26px;
+  top: 3px;
+  bottom: 3px;
+  width: 3px;
+  border-radius: 0 999px 999px 0;
+  background: var(--brand);
 }
 
 .task-search {
@@ -3203,61 +3410,216 @@ button {
   opacity: 0.64;
 }
 
-.ai-workflow-card {
+.ai-source-card {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   margin-top: 10px;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--brand) 20%, var(--line));
-  border-radius: 12px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--brand) 18%, var(--line));
+  border-radius: 10px;
   background: color-mix(in srgb, var(--brand) 5%, var(--surface));
 }
 
-.ai-workflow-title {
+.ai-source-card strong {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ai-source-card div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-source-card span {
+  display: inline-flex;
+  margin: 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 9%, transparent);
+  font-size: 11px;
+  opacity: 1;
+}
+
+.ai-workflow-card {
+  display: grid;
+  gap: 18px;
+  margin-top: 16px;
+  padding: 22px 24px;
+  width: min(820px, 100%);
+  min-height: 360px;
+  border: 1px solid color-mix(in srgb, var(--brand) 20%, var(--line));
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface) 94%, var(--brand) 3%);
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+}
+
+.ai-workflow-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.ai-workflow-head h3 {
+  margin: 0;
+  font-size: 20px;
   font-weight: 900;
   color: var(--text);
 }
 
-.ai-workflow-step {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-  padding: 8px;
-  border-radius: 10px;
-  background: var(--surface);
-}
-
-.ai-workflow-step > span {
+.ai-workflow-icon {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
-  margin: 0;
-  border-radius: 999px;
+  border-radius: 50%;
   color: var(--brand);
   background: color-mix(in srgb, var(--brand) 12%, transparent);
-  font-size: 12px;
+}
+
+.ai-workflow-icon .icon {
+  width: 24px;
+  height: 24px;
+  stroke-width: 2.2;
+}
+
+.ai-workflow-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr 0.7fr 0.7fr 1fr;
+  gap: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.ai-workflow-summary > div {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 28px;
+  border-left: 1px solid var(--line);
+}
+
+.ai-workflow-summary > div:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.ai-workflow-summary span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.ai-workflow-summary strong {
+  overflow: hidden;
+  color: var(--brand);
+  font-size: 17px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-workflow-action-strip {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 0.95fr) minmax(140px, 0.8fr);
+  gap: 18px;
+  align-items: center;
+}
+
+.ai-workflow-action-strip:empty {
+  display: none;
+}
+
+.ai-workflow-action-strip .btn {
+  min-height: 50px;
+  justify-content: center;
+  border-radius: 12px;
+  font-size: 15px;
   font-weight: 900;
 }
 
-.ai-workflow-step small {
-  display: block;
-  margin-top: 2px;
-  color: var(--muted);
+.ai-workflow-action-strip .btn .icon {
+  width: 20px;
+  height: 20px;
 }
 
-.ai-workflow-step em {
-  font-style: normal;
-  font-size: 12px;
-  color: var(--muted);
+.workflow-secondary-action {
+  color: var(--text-soft);
+  background: var(--surface);
 }
 
-.ai-workflow-actions {
-  display: flex;
-  flex-wrap: wrap;
+.ai-workflow-timeline {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 10px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.ai-workflow-node {
+  position: relative;
+  display: grid;
+  justify-items: center;
   gap: 8px;
-  padding-top: 2px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.ai-workflow-node i {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 2px solid color-mix(in srgb, var(--muted) 44%, var(--line));
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.ai-workflow-node i .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.ai-workflow-node.completed i {
+  color: #fff;
+  border-color: var(--brand);
+  background: var(--brand);
+}
+
+.ai-workflow-node.active i,
+.ai-workflow-node.running i,
+.ai-workflow-node.awaiting_confirmation i {
+  border-color: var(--brand);
+  background: var(--brand);
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--brand) 10%, transparent);
+}
+
+.ai-workflow-node.active span,
+.ai-workflow-node.running span,
+.ai-workflow-node.awaiting_confirmation span {
+  color: var(--brand);
+}
+
+.ai-workflow-node b {
+  position: absolute;
+  top: 2px;
+  right: -14px;
+  color: color-mix(in srgb, var(--muted) 58%, transparent);
+}
+
+.ai-workflow-current {
+  color: var(--text-soft);
+  font-size: 14px;
+}
+
+.ai-workflow-current strong {
+  color: var(--brand);
 }
 
 .ai-chat-row.user .ai-chat-bubble span {
@@ -3469,6 +3831,9 @@ button {
   position: relative;
   padding: 16px;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .ai-session-resizer {
@@ -3543,6 +3908,23 @@ button {
   display: grid;
   gap: 14px;
   margin-top: 18px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.ai-session-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.ai-session-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 28%, transparent);
+}
+
+.ai-session-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .ai-session-group {
@@ -5235,6 +5617,7 @@ button {
 }
 
 .problem-board {
+  position: relative;
   padding: 18px;
   display: grid;
   gap: 18px;
@@ -5317,14 +5700,22 @@ button {
 }
 
 .problem-filter-bar {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(140px, 1fr)) minmax(260px, 1.35fr) auto auto auto;
+  display: flex;
   gap: 12px;
-  align-items: end;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  position: relative;
 }
 
 .problem-search {
-  height: 44px;
+  min-height: 44px;
+}
+
+.problem-filter-bar .btn,
+.task-filter-bar .btn,
+.table-toolbar-actions .btn {
+  flex: 0 0 auto;
 }
 
 .problem-table th,
