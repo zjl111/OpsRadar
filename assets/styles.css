@@ -3203,6 +3203,63 @@ button {
   opacity: 0.64;
 }
 
+.ai-workflow-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--brand) 20%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--brand) 5%, var(--surface));
+}
+
+.ai-workflow-title {
+  font-weight: 900;
+  color: var(--text);
+}
+
+.ai-workflow-step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.ai-workflow-step > span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  border-radius: 999px;
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ai-workflow-step small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.ai-workflow-step em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ai-workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 2px;
+}
+
 .ai-chat-row.user .ai-chat-bubble span {
   text-align: right;
 }
@@ -5261,7 +5318,7 @@ button {
 
 .problem-filter-bar {
   display: grid;
-  grid-template-columns: repeat(5, minmax(140px, 1fr)) minmax(260px, 1.35fr) auto;
+  grid-template-columns: repeat(5, minmax(140px, 1fr)) minmax(260px, 1.35fr) auto auto auto;
   gap: 12px;
   align-items: end;
 }
@@ -5382,6 +5439,52 @@ button {
   color: var(--text-soft);
   line-height: 1.7;
   margin: 0 0 10px;
+}
+
+.repair-task-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.repair-task-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.repair-task-card small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.evidence-snapshot {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--brand) 18%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--brand) 5%, var(--surface));
+}
+
+.evidence-snapshot pre {
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
 }
 
 .detail-dl {

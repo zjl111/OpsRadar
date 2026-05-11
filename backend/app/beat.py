@@ -31,6 +31,7 @@ def scan_once() -> int:
                 user_id=plan.created_by,
                 environment_id=plan.environment_id,
                 config={"source": "cron_plan", "cron_plan_id": plan.id, **dict(plan.notification_config or {})},
+                resource_item_ids=dict((plan.notification_config or {}).get("resource_item_ids") or {}),
             )
             try:
                 task.status = "queued"

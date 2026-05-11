@@ -1,6 +1,6 @@
 # OpsRadar 运维自动化巡检管理平台
 
-OpsRadar is a production-oriented inspection platform built on FastAPI, PostgreSQL, Redis and Celery. The current production scope supports real Linux/Unix host inspection through SSH, encrypted resource credentials, RBAC, audit logs and report export.
+OpsRadar is a production-oriented inspection platform built on FastAPI, PostgreSQL, Redis and Celery. The current production scope supports real Linux/Unix host inspection through SSH, encrypted resource credentials, RBAC, audit logs, report export, and a task-oriented AI assistant that drives inspection workflows.
 
 ## Screenshots
 
@@ -12,17 +12,51 @@ OpsRadar is a production-oriented inspection platform built on FastAPI, PostgreS
 
 ![OpsRadar overview](docs/screenshots/overview.png)
 
-### Task Center
+### Smart Inspection
 
-![OpsRadar task center](docs/screenshots/task-center.png)
+![OpsRadar smart inspection](docs/screenshots/task-center.png)
 
-### Resource Inventory
+### Resource Center
 
 ![OpsRadar resources](docs/screenshots/resources.png)
 
-### Inspection Templates
+### Rule Sets
 
-![OpsRadar templates](docs/screenshots/templates.png)
+![OpsRadar rule sets](docs/screenshots/templates.png)
+
+## AI Workflow
+
+The AI assistant is a workflow orchestrator, not a free-form chat bot. It recognizes OpsRadar actions, persists workflow state, and waits for user confirmation when a business modal or a mutating action is required.
+
+```mermaid
+flowchart TD
+  U["User message"] --> I["Intent detection"]
+  I --> W["Create workflow"]
+  W --> E["Check application/environment"]
+  E --> A["Check assets / scope"]
+  A --> C["Test connectivity"]
+  C --> S["Service discovery"]
+  S --> R["Match rule sets"]
+  R --> T["Create / confirm inspection task"]
+  T --> X["Run inspection"]
+  X --> P["Generate report"]
+  P --> Q["Create issues"]
+  Q --> N["AI summary"]
+  N --> F["Next actions"]
+```
+
+Workflow callbacks keep the flow alive after the user completes a modal:
+
+- `environment_created`
+- `asset_created`
+- `asset_selected`
+- `connection_tested`
+- `services_discovered`
+- `rules_confirmed`
+- `task_created`
+- `task_finished`
+
+The assistant only returns actions and explanations that are backed by platform data. It does not invent assets, issues, reports, or repair results.
 
 ## Production Deployment
 
@@ -110,6 +144,7 @@ python3 -m backend.app.cli check
 - RBAC-protected API routes and audit logs for write/security events.
 - Docker Compose production stack with Nginx TLS proxy.
 - HTML, DOCX and PDF report export.
+- Persistent AI workflow state machine with callback-driven task execution.
 
 ## Verification
 

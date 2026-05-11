@@ -23,6 +23,7 @@ from backend.app.models import (
     AiChatMessage,
     AiChatSession,
     AiModelConfig,
+    AiWorkflow,
     AppEnvironment,
     Application,
     AuditLog,
@@ -32,11 +33,13 @@ from backend.app.models import (
     EnvironmentDatasourceBinding,
     EnvironmentResource,
     InspectionItem,
+    InspectionReport,
     Issue,
     IssueInsight,
     NotificationChannel,
     ObservationQueryResult,
     ObservabilityDatasource,
+    RepairTask,
     Resource,
     ResourceType,
     Role,
@@ -50,14 +53,18 @@ from backend.app.models import (
 from backend.app.schemas import (
     AnalysisRulePayload,
     AiAssistantSettingsPayload,
+    AiActionInvokePayload,
     AiChatPayload,
     AiModelConfigPayload,
     AiModelDiscoverPayload,
+    AiWorkflowEventPayload,
+    AiWorkflowPayload,
     ApplicationPayload,
     EnvironmentDatasourceBindingPayload,
     EnvironmentPayload,
     EnvironmentRuleSetBindingPayload,
     InspectionItemCreate,
+    IssueBulkPayload,
     IssueUpdate,
     LoginRequest,
     ManualTaskRequest,
@@ -68,6 +75,7 @@ from backend.app.schemas import (
     ResourceCreate,
     ResourceTypePayload,
     ResourceUpdate,
+    RepairTaskPayload,
     RoleUpdate,
     RuleSetPayload,
     SiteSettingsUpdate,
@@ -76,6 +84,17 @@ from backend.app.schemas import (
     UserUpdate,
 )
 from backend.app.services.analysis import build_issue_insight, environment_overview
+from backend.app.services.ai_actions import (
+    OPSRADAR_AGENT_SYSTEM_PROMPT,
+    build_workflow,
+    cancel_workflow,
+    create_workflow,
+    execute_action,
+    execute_workflow_action,
+    handle_workflow_event,
+    list_actions,
+    workflow_payload,
+)
 from backend.app.services.inspection_engine import create_manual_task
 from backend.app.services.crypto import decrypt_secret, has_encrypted_credential, set_encrypted_credential
 from backend.app.services.diagnose_tools import (
@@ -357,6 +376,23 @@ def ai_analysis_result_payload(result: AiAnalysisResult) -> dict:
     return model_to_dict(result)
 
 
+def inspection_report_payload(report: InspectionReport) -> dict:
+    data = model_to_dict(report)
+    task = report.task
+    data["task_name"] = task.name if task else ""
+    data["task_status"] = task.status if task else report.status
+    data["application_name"] = report.application.name if report.application else (task.application.name if task and task.application else "")
+    data["environment_name"] = report.environment.name if report.environment else (task.environment.name if task and task.environment else "")
+    data["finished_at"] = fmt_dt(task.finished_at) if task else None
+    return data
+
+
+def repair_task_payload(item: RepairTask) -> dict:
+    data = model_to_dict(item)
+    data["issue_summary"] = item.issue.summary if item.issue else ""
+    return data
+
+
 def task_payload(task: Task, include_results: bool = False, include_logs: bool = False) -> dict:
     data = model_to_dict(task)
     data["application_name"] = task.application.name if task.application else ""
@@ -428,6 +464,7 @@ def issue_payload(issue: Issue, db: Session | None = None, include_insight: bool
     data["resource_name"] = resource.name if resource else snapshot.get("name", "")
     data["resource_ip"] = resource.ip if resource else snapshot.get("ip", "")
     data["resource_type"] = resource.type if resource else snapshot.get("type", "")
+    data["report_name"] = issue.report.task.name if issue.report and issue.report.task else ""
     if include_insight and db is not None:
         insight = db.query(IssueInsight).filter(IssueInsight.issue_id == issue.id).one_or_none()
         data["insight"] = model_to_dict(insight) if insight else None
@@ -459,7 +496,12 @@ def next_run_for(cron_expr: str, base: datetime | None = None) -> datetime:
     return croniter(cron_expr, base or datetime.now(timezone.utc)).get_next(datetime)
 
 
-def task_create_config(payload: TaskCreateRequest) -> dict:
+def task_create_config(
+    payload: TaskCreateRequest,
+    resource_ids: list[str] | None = None,
+    item_ids: list[str] | None = None,
+    resource_item_ids: dict[str, list[str]] | None = None,
+) -> dict:
     data = {
         "inspection_scope": payload.inspection_scope,
         "description": payload.description,
@@ -477,6 +519,13 @@ def task_create_config(payload: TaskCreateRequest) -> dict:
         "retry_policy": payload.retry_policy,
         "note": payload.note,
     }
+    if resource_ids is not None:
+        data["resource_ids"] = resource_ids
+    if item_ids is not None:
+        data["item_ids"] = item_ids
+    if resource_item_ids is not None:
+        data["resource_item_ids"] = resource_item_ids
+        data["item_selection_mode"] = "manual" if payload.item_ids else "environment_rule_sets"
     return data
 
 
@@ -588,10 +637,15 @@ def rule_set_matches_resource(rule_set: RuleSet, resource: Resource) -> bool:
 
 
 def resolve_task_item_ids(db: Session, payload: TaskCreateRequest, resource_ids: list[str]) -> list[str]:
+    resource_item_ids = resolve_task_resource_item_ids(db, payload, resource_ids)
+    return sorted({item_id for ids in resource_item_ids.values() for item_id in ids})
+
+
+def resolve_task_resource_item_ids(db: Session, payload: TaskCreateRequest, resource_ids: list[str]) -> dict[str, list[str]]:
     explicit_ids = sorted({item_id for item_id in payload.item_ids if item_id})
     if explicit_ids:
         validate_rule_set_items(db, explicit_ids)
-        return explicit_ids
+        return {resource_id: explicit_ids for resource_id in resource_ids}
     if not payload.environment_id:
         raise HTTPException(status_code=422, detail="Select at least one inspection item")
     rule_sets = (
@@ -607,15 +661,19 @@ def resolve_task_item_ids(db: Session, payload: TaskCreateRequest, resource_ids:
     if not rule_sets:
         raise HTTPException(status_code=422, detail="Bind at least one rule set to this application environment")
     resources = db.query(Resource).filter(Resource.id.in_(resource_ids)).all()
-    ids: set[str] = set()
+    resource_item_ids: dict[str, list[str]] = {}
     for resource in resources:
+        ids: set[str] = set()
         for rule_set in rule_sets:
             if rule_set_matches_resource(rule_set, resource):
                 ids.update(str(item_id) for item_id in (rule_set.item_ids or []) if item_id)
-    if not ids:
+        if ids:
+            resource_item_ids[resource.id] = sorted(ids)
+    all_ids = sorted({item_id for ids in resource_item_ids.values() for item_id in ids})
+    if not all_ids:
         raise HTTPException(status_code=422, detail="No inspection items matched selected resources and environment rule sets")
-    validate_rule_set_items(db, sorted(ids))
-    return sorted(ids)
+    validate_rule_set_items(db, all_ids)
+    return resource_item_ids
 
 
 def resource_execution_snapshot(resource: Resource) -> dict:
@@ -785,8 +843,10 @@ def bootstrap(db: Annotated[Session, Depends(get_db)], user: Annotated[User, Dep
         "rule_sets": [rule_set_payload(item) for item in db.query(RuleSet).order_by(RuleSet.name).all()] if can(db, user, "templates:read") else [],
         "inspection_items": [model_to_dict(item) for item in db.query(InspectionItem).order_by(InspectionItem.category, InspectionItem.name).all()] if can(db, user, "templates:read") else [],
         "tasks": [task_payload(item) for item in db.query(Task).order_by(Task.created_at.desc()).limit(30).all()] if can(db, user, "tasks:read") else [],
+        "inspection_reports": [inspection_report_payload(item) for item in db.query(InspectionReport).order_by(InspectionReport.created_at.desc()).limit(100).all()] if can(db, user, "reports:read") else [],
         "issues": [issue_payload(item, db) for item in db.query(Issue).order_by(Issue.created_at.desc()).limit(50).all()] if can(db, user, "issues:read") else [],
         "issue_insights": [model_to_dict(item) for item in db.query(IssueInsight).order_by(IssueInsight.created_at.desc()).limit(100).all()] if can(db, user, "issues:read") else [],
+        "repair_tasks": [repair_task_payload(item) for item in db.query(RepairTask).order_by(RepairTask.created_at.desc()).limit(100).all()] if can(db, user, "repair_tasks:read") else [],
         "analysis_rules": [model_to_dict(item) for item in db.query(AnalysisRule).order_by(AnalysisRule.created_at.desc()).all()] if can(db, user, "analysis_rules:read") else [],
         "ai_models": [ai_model_payload(item) for item in db.query(AiModelConfig).order_by(AiModelConfig.created_at.desc()).all()] if can(db, user, "ai_models:read") else [],
         "ai_datasources": [observability_datasource_payload(item) for item in db.query(ObservabilityDatasource).order_by(ObservabilityDatasource.created_at.desc()).all()] if can(db, user, "ai_datasources:read") else [],
@@ -1453,6 +1513,79 @@ def delete_ai_chat_session(session_id: str, db: Annotated[Session, Depends(get_d
     return {"ok": True}
 
 
+@router.get("/ai/actions")
+def get_ai_actions(db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(require_user)]) -> dict:
+    require_permission(db, user, "ai_assistant:read")
+    return {"items": list_actions()}
+
+
+@router.post("/ai/workflows")
+def create_ai_workflow(payload: AiWorkflowPayload, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(require_user)]) -> dict:
+    require_permission(db, user, "ai_assistant:read")
+    workflow = create_workflow(db, user, payload.session_id, payload.message, payload.context)
+    db.add(AuditLog(actor=user.display_name, action="ai_workflow_create", target=payload.message[:128], detail=workflow.get("state", "")))
+    db.commit()
+    return workflow
+
+
+@router.get("/ai/workflows/{workflow_id}")
+def get_ai_workflow(workflow_id: str, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(require_user)]) -> dict:
+    require_permission(db, user, "ai_assistant:read")
+    workflow = db.get(AiWorkflow, workflow_id)
+    if not workflow or workflow.created_by != user.id:
+        raise HTTPException(status_code=404, detail="AI workflow not found")
+    return workflow_payload(db, workflow)
+
+
+@router.post("/ai/workflows/{workflow_id}/events")
+def post_ai_workflow_event(
+    workflow_id: str,
+    payload: AiWorkflowEventPayload,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_user)],
+) -> dict:
+    require_permission(db, user, "ai_assistant:read")
+    workflow = db.get(AiWorkflow, workflow_id)
+    if not workflow or workflow.created_by != user.id:
+        raise HTTPException(status_code=404, detail="AI workflow not found")
+    return handle_workflow_event(db, workflow, payload.event, payload.payload)
+
+
+@router.post("/ai/workflows/{workflow_id}/actions/{action_name}")
+async def invoke_ai_workflow_action(
+    workflow_id: str,
+    action_name: str,
+    payload: AiActionInvokePayload,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_user)],
+) -> dict:
+    require_permission(db, user, "ai_assistant:read")
+    workflow = db.get(AiWorkflow, workflow_id)
+    if not workflow or workflow.created_by != user.id:
+        raise HTTPException(status_code=404, detail="AI workflow not found")
+    return await execute_workflow_action(db, user, workflow, action_name, payload.params, payload.confirmed, lambda permission: can(db, user, permission))
+
+
+@router.post("/ai/workflows/{workflow_id}/cancel")
+def cancel_ai_workflow(workflow_id: str, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(require_user)]) -> dict:
+    require_permission(db, user, "ai_assistant:read")
+    workflow = db.get(AiWorkflow, workflow_id)
+    if not workflow or workflow.created_by != user.id:
+        raise HTTPException(status_code=404, detail="AI workflow not found")
+    return cancel_workflow(db, workflow)
+
+
+@router.post("/ai/actions/{action_name}")
+async def invoke_ai_action(
+    action_name: str,
+    payload: AiActionInvokePayload,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_user)],
+) -> dict:
+    require_permission(db, user, "ai_assistant:read")
+    return await execute_action(db, user, action_name, payload.params, payload.confirmed, lambda permission: can(db, user, permission))
+
+
 def _chat_data_context(db: Session) -> dict:
     enabled_sources = db.query(ObservabilityDatasource).filter(ObservabilityDatasource.enabled.is_(True)).all()
     source_types = {source.type for source in enabled_sources}
@@ -1621,6 +1754,40 @@ def _out_of_scope_reply() -> str:
     )
 
 
+def _workflow_reply(workflow: dict) -> str | None:
+    if workflow.get("intent") == "opsradar_qna" or workflow.get("status") == "not_required":
+        return None
+    state = workflow.get("state")
+    if state == "WAITING_ENV_CREATE":
+        return f"{workflow.get('last_error') or '未找到目标应用环境'}。请先创建或选择应用环境，完成后我会继续原始巡检流程。"
+    if state == "WAITING_ENV_CONFIRM":
+        context = workflow.get("context", {})
+        return f"我找到一个候选应用环境：{context.get('candidate_application_name', '')} / {context.get('candidate_environment_name', '')}。请确认是否使用。"
+    if state == "WAITING_ASSET_CREATE":
+        return "应用环境已确认，但还没有可巡检资产。请先添加资产或选择已有资产，补齐后我会继续连通性测试。"
+    if state == "WAITING_SCOPE_CONFIRM":
+        return "已找到环境下的资产。请确认本次巡检范围，之后会继续测试连通性、服务发现和规则匹配。"
+    if state == "WAITING_CONNECTION_TEST":
+        return "巡检范围已确认。下一步是测试资产连通性，确认后我会继续服务发现和规则匹配。"
+    if state == "WAITING_SERVICE_DISCOVERY":
+        return "资产连通性已准备好。下一步是执行服务发现，确认后我会继续规则匹配。"
+    if state == "WAITING_RULE_SELECT":
+        return "资产和服务范围已确认，但环境尚未绑定规则集。请先绑定规则集，绑定后我会继续创建巡检任务。"
+    if state == "WAITING_TASK_CREATE":
+        return "巡检范围与规则集已确认。请确认创建巡检任务，创建后我会继续提示启动执行。"
+    if state == "WAITING_TASK_START":
+        return "巡检任务已创建，但还未执行。请确认启动巡检任务。"
+    if state == "WAITING_REPORT_GENERATE":
+        return "巡检已执行完毕，正在等待生成报告。确认后我会继续同步问题和总结结果。"
+    if state == "WAITING_ISSUES_SYNC":
+        return "报告可生成，下一步是同步问题列表。确认后我会继续汇总结果。"
+    if state == "TASK_RUNNING":
+        return "巡检任务已进入执行队列。我会基于任务状态继续推进报告生成和问题同步。"
+    if state == "DONE":
+        return "巡检闭环已完成。你可以继续查看报告、查看问题列表、生成修复建议或创建修复任务。"
+    return "请按下面的工作流步骤确认下一步。"
+
+
 @router.post("/ai/chat")
 def ai_chat(payload: AiChatPayload, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(require_user)]) -> dict:
     require_permission(db, user, "ai_assistant:read")
@@ -1651,16 +1818,23 @@ def ai_chat(payload: AiChatPayload, db: Annotated[Session, Depends(get_db)], use
         db.add(AiChatMessage(session_id=session.id, role="assistant", content=out_of_scope_reply, meta={"status": "out_of_scope", "data_context": data_context, "tool_runs": [], "evidence": []}))
         db.commit()
         return {"session_id": session.id, "message": out_of_scope_reply, "status": "out_of_scope", "tool_runs": [], "evidence": [], "data_context": data_context}
+    workflow_preview = build_workflow(db, payload.message, payload.context)
+    workflow = create_workflow(db, user, session.id, payload.message, payload.context) if workflow_preview.get("intent") != "opsradar_qna" else workflow_preview
+    workflow_reply = _workflow_reply(workflow)
+    if workflow_reply:
+        db.add(AiChatMessage(session_id=session.id, role="assistant", content=workflow_reply, meta={"status": "workflow_ready", "data_context": data_context, "tool_runs": [], "evidence": [], "workflow": workflow}))
+        db.commit()
+        return {"session_id": session.id, "message": workflow_reply, "status": "workflow_ready", "tool_runs": [], "evidence": [], "data_context": data_context, "workflow": workflow}
     empty_reply = _empty_context_reply(payload.message, data_context)
     if empty_reply:
-        db.add(AiChatMessage(session_id=session.id, role="assistant", content=empty_reply, meta={"status": "empty_context", "data_context": data_context, "tool_runs": [], "evidence": []}))
+        db.add(AiChatMessage(session_id=session.id, role="assistant", content=empty_reply, meta={"status": "empty_context", "data_context": data_context, "tool_runs": [], "evidence": [], "workflow": workflow}))
         db.commit()
-        return {"session_id": session.id, "message": empty_reply, "status": "empty_context", "tool_runs": [], "evidence": [], "data_context": data_context}
+        return {"session_id": session.id, "message": empty_reply, "status": "empty_context", "tool_runs": [], "evidence": [], "data_context": data_context, "workflow": workflow}
     observability_reply = _observability_context_reply(payload.message, data_context)
     if observability_reply:
-        db.add(AiChatMessage(session_id=session.id, role="assistant", content=observability_reply, meta={"status": "observability_not_configured", "data_context": data_context, "tool_runs": [], "evidence": []}))
+        db.add(AiChatMessage(session_id=session.id, role="assistant", content=observability_reply, meta={"status": "observability_not_configured", "data_context": data_context, "tool_runs": [], "evidence": [], "workflow": workflow}))
         db.commit()
-        return {"session_id": session.id, "message": observability_reply, "status": "observability_not_configured", "tool_runs": [], "evidence": [], "data_context": data_context}
+        return {"session_id": session.id, "message": observability_reply, "status": "observability_not_configured", "tool_runs": [], "evidence": [], "data_context": data_context, "workflow": workflow}
     selected_tools = select_tools_for_prompt(payload.message)
     evidence = diagnose_evidence([tool.id for tool in selected_tools])
     tool_names = "、".join(tool.name for tool in selected_tools) or "智能诊断工具"
@@ -1676,13 +1850,10 @@ def ai_chat(payload: AiChatPayload, db: Annotated[Session, Depends(get_db)], use
                 {
                     "role": "system",
                     "content": (
-                        "你是 OpsRadar AI 助手，只能回答 OpsRadar 系统内的运维巡检、资源管理、服务发现、问题排障、根因分析、影响分析、修复建议、任务编排、报告和平台配置问题。"
-                        "遇到与 OpsRadar 无关的问题必须拒答，不要进行通用聊天、百科问答或无关代码生成。"
-                        "如果需要执行工具，请明确列出建议调用的 Diagnose Tools 和需要的参数；不要编造实时执行结果。"
-                        "如果当前没有资产、巡检结果、异常问题或工具证据，必须明确说明暂无可分析数据，不能给出泛化根因结论。"
-                        "查询历史监控或集中日志前必须检查数据源状态；未接入时只能使用巡检结果或通过远程连接采集现场状态。"
-                        f"\n当前数据上下文: assets={data_context['resources']}, issues={data_context['issues']}, open_issues={data_context['open_issues']}, tasks={data_context['tasks']}, results={data_context['results']}, metrics_datasources={data_context['metrics_datasources']}, log_datasources={data_context['log_datasources']}."
-                        f"\n当前匹配的 Diagnose Tools:\n{tool_context}"
+                        OPSRADAR_AGENT_SYSTEM_PROMPT
+                        + "\n你只能回答 OpsRadar 平台内的问题；不能编造资产、结果、报告、问题或修复执行结果。"
+                        + f"\n当前数据上下文: assets={data_context['resources']}, issues={data_context['issues']}, open_issues={data_context['open_issues']}, tasks={data_context['tasks']}, results={data_context['results']}, metrics_datasources={data_context['metrics_datasources']}, log_datasources={data_context['log_datasources']}."
+                        + f"\n当前匹配的 Diagnose Tools:\n{tool_context}"
                     ),
                 }
             ]
@@ -1705,11 +1876,11 @@ def ai_chat(payload: AiChatPayload, db: Annotated[Session, Depends(get_db)], use
             session_id=session.id,
             role="assistant",
             content=assistant_message,
-            meta={"status": assistant_status, "tool_runs": [tool.to_dict() for tool in selected_tools], "evidence": evidence},
+            meta={"status": assistant_status, "tool_runs": [tool.to_dict() for tool in selected_tools], "evidence": evidence, "workflow": workflow},
         )
     )
     db.commit()
-    return {"session_id": session.id, "message": assistant_message, "status": assistant_status, "tool_runs": [tool.to_dict() for tool in selected_tools], "evidence": evidence}
+    return {"session_id": session.id, "message": assistant_message, "status": assistant_status, "tool_runs": [tool.to_dict() for tool in selected_tools], "evidence": evidence, "workflow": workflow}
 
 
 @router.patch("/settings/site")
@@ -2182,7 +2353,8 @@ def delete_cron_plan(
 
 def apply_cron_plan_payload(db: Session, plan: CronPlan, payload: TaskCreateRequest, creator_id: str | None) -> CronPlan:
     resource_ids = validate_task_create_payload(db, payload)
-    item_ids = resolve_task_item_ids(db, payload, resource_ids)
+    resource_item_ids = resolve_task_resource_item_ids(db, payload, resource_ids)
+    item_ids = sorted({item_id for ids in resource_item_ids.values() for item_id in ids})
     cron_expr = cron_expr_for(payload.schedule_rule, payload.schedule_time)
     plan.name = payload.name
     plan.environment_id = payload.environment_id
@@ -2193,7 +2365,11 @@ def apply_cron_plan_payload(db: Session, plan: CronPlan, payload: TaskCreateRequ
     plan.item_ids = item_ids
     plan.enabled = True
     plan.next_run_at = next_run_for(cron_expr)
-    plan.notification_config = enrich_task_config_with_environment(db, task_create_config(payload), payload.environment_id)
+    plan.notification_config = enrich_task_config_with_environment(
+        db,
+        task_create_config(payload, resource_ids, item_ids, resource_item_ids),
+        payload.environment_id,
+    )
     return plan
 
 
@@ -2227,8 +2403,13 @@ def create_configured_task(
 ) -> dict:
     require_permission(db, user, "tasks:create")
     resource_ids = validate_task_create_payload(db, payload)
-    item_ids = resolve_task_item_ids(db, payload, resource_ids)
-    config = enrich_task_config_with_environment(db, task_create_config(payload), payload.environment_id)
+    resource_item_ids = resolve_task_resource_item_ids(db, payload, resource_ids)
+    item_ids = sorted({item_id for ids in resource_item_ids.values() for item_id in ids})
+    config = enrich_task_config_with_environment(
+        db,
+        task_create_config(payload, resource_ids, item_ids, resource_item_ids),
+        payload.environment_id,
+    )
     creator_id = payload.owner_id or user.id
     if payload.execution_mode == "periodic":
         plan = apply_cron_plan_payload(db, CronPlan(), payload, creator_id)
@@ -2246,6 +2427,7 @@ def create_configured_task(
         user_id=creator_id,
         environment_id=payload.environment_id,
         config=config,
+        resource_item_ids=resource_item_ids,
     )
     db.add(TaskLog(task_id=task.id, level="info", message="Task saved. Waiting for manual start."))
     db.add(AuditLog(actor=user.display_name, action="save_task", target=task.name, detail="pending"))
@@ -2284,22 +2466,31 @@ def update_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     resource_ids = validate_task_create_payload(db, payload)
-    item_ids = resolve_task_item_ids(db, payload, resource_ids)
+    resource_item_ids = resolve_task_resource_item_ids(db, payload, resource_ids)
+    item_ids = sorted({item_id for ids in resource_item_ids.values() for item_id in ids})
     task.name = payload.name
     task.environment_id = payload.environment_id
     environment = db.get(AppEnvironment, payload.environment_id) if payload.environment_id else None
     task.application_id = environment.application_id if environment else None
     task.created_by = payload.owner_id or task.created_by or user.id
-    task.config = enrich_task_config_with_environment(db, task_create_config(payload), payload.environment_id)
+    task.config = enrich_task_config_with_environment(
+        db,
+        task_create_config(payload, resource_ids, item_ids, resource_item_ids),
+        payload.environment_id,
+    )
     if task.status in {"pending", "queued"}:
         db.query(TaskResult).filter(TaskResult.task_id == task.id).delete(synchronize_session=False)
         db.flush()
         resources = db.query(Resource).filter(Resource.id.in_(resource_ids)).all()
         items = db.query(InspectionItem).filter(InspectionItem.id.in_(item_ids)).all()
+        items_by_id = {item.id: item for item in items}
         total = 0
         from backend.app.services.inspection_engine import _compatible, _item_snapshot
         for resource in resources:
-            for item in items:
+            for item_id in resource_item_ids.get(resource.id, []):
+                item = items_by_id.get(item_id)
+                if not item:
+                    continue
                 if not _compatible(resource, item):
                     continue
                 db.add(TaskResult(task_id=task.id, resource_id=resource.id, item_id=item.id, resource_snapshot=resource_snapshot_for_task(db, resource, item, payload.environment_id), item_snapshot=_item_snapshot(item, resource), status="pending"))
@@ -2494,6 +2685,57 @@ def create_inspection_item(payload: InspectionItemCreate, db: Annotated[Session,
     db.commit()
     db.refresh(item)
     return model_to_dict(item)
+
+
+@router.post("/issues/bulk/resolve")
+def resolve_issues_bulk(payload: IssueBulkPayload, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(require_user)]) -> dict:
+    require_permission(db, user, "issues:update")
+    ids = sorted({item for item in payload.ids if item})
+    if not ids:
+        raise HTTPException(status_code=422, detail="Select at least one issue")
+    issues = db.query(Issue).filter(Issue.id.in_(ids)).all()
+    if not issues:
+        raise HTTPException(status_code=404, detail="No issues found")
+    status = payload.status or "resolved"
+    for issue in issues:
+        issue.status = status
+        if payload.resolution_note is not None:
+            issue.resolution_note = payload.resolution_note
+        elif status == "resolved" and not issue.resolution_note:
+            issue.resolution_note = "Bulk marked as resolved from OpsRadar console"
+        issue.updated_at = datetime.now(timezone.utc)
+    db.add(AuditLog(actor=user.display_name, action="bulk_resolve_issues", target=f"{len(issues)} issues", detail=f"status={status}"))
+    db.commit()
+    return {"ok": True, "count": len(issues), "status": status}
+
+
+@router.post("/issues/bulk/delete")
+def delete_issues_bulk(payload: IssueBulkPayload, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(require_user)]) -> dict:
+    require_permission(db, user, "issues:update")
+    ids = sorted({item for item in payload.ids if item})
+    if not ids:
+        raise HTTPException(status_code=422, detail="Select at least one issue")
+    issues = db.query(Issue).filter(Issue.id.in_(ids)).all()
+    count = len(issues)
+    for issue in issues:
+        db.delete(issue)
+    db.add(AuditLog(actor=user.display_name, action="bulk_delete_issues", target=f"{count} issues", detail=",".join(ids[:20])))
+    db.commit()
+    return {"ok": True, "count": count}
+
+
+@router.post("/repair-tasks")
+def create_repair_task(payload: RepairTaskPayload, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(require_user)]) -> dict:
+    require_permission(db, user, "repair_tasks:create")
+    issue = db.get(Issue, payload.issue_id)
+    if not issue:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    task = RepairTask(**payload.model_dump())
+    db.add(task)
+    db.add(AuditLog(actor=user.display_name, action="create_repair_task", target=task.title, detail=issue.summary))
+    db.commit()
+    db.refresh(task)
+    return repair_task_payload(task)
 
 
 @router.patch("/issues/{issue_id}")

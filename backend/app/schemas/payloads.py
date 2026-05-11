@@ -186,6 +186,22 @@ class IssueUpdate(BaseModel):
     resolution_note: str | None = None
 
 
+class IssueBulkPayload(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+    status: Literal["open", "in_progress", "resolved", "ignored"] | None = None
+    resolution_note: str | None = None
+
+
+class RepairTaskPayload(BaseModel):
+    issue_id: str
+    title: str = Field(min_length=2, max_length=255)
+    status: Literal["pending", "in_progress", "done", "cancelled"] = "pending"
+    assignee: str = Field(default="Unassigned", max_length=128)
+    suggested_steps: list[str] = Field(default_factory=list)
+    verification: str = ""
+    created_by_ai: bool = False
+
+
 class AiModelConfigPayload(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
@@ -246,3 +262,20 @@ class AiChatPayload(BaseModel):
     session_id: str | None = None
     message: str = Field(min_length=1, max_length=4000)
     context: dict = Field(default_factory=dict)
+
+
+class AiWorkflowPayload(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    context: dict = Field(default_factory=dict)
+    session_id: str | None = None
+
+
+class AiWorkflowEventPayload(BaseModel):
+    event: str = Field(min_length=1, max_length=64)
+    payload: dict = Field(default_factory=dict)
+
+
+class AiActionInvokePayload(BaseModel):
+    params: dict = Field(default_factory=dict)
+    confirmed: bool = False
+    session_id: str | None = None

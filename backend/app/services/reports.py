@@ -11,7 +11,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
-from backend.app.models import Issue, IssueInsight, Task, TaskResult
+from backend.app.models import InspectionReport, Issue, IssueInsight, Task, TaskResult
 from backend.app.services.analysis import environment_overview
 from backend.app.services.serializers import model_to_dict
 
@@ -108,6 +108,30 @@ def render_report_html(db: Session, task_ids: list[str]) -> str:
         tasks=tasks,
         issues=issues,
     )
+
+
+def persist_inspection_report(db: Session, task: Task) -> InspectionReport:
+    existing = db.query(InspectionReport).filter(InspectionReport.task_id == task.id).order_by(InspectionReport.created_at.desc()).first()
+    html_path = settings.report_dir / f"{task.id}.html"
+    html_path.write_text(render_report_html(db, [task.id]), encoding="utf-8")
+    summary = dict(task.summary or {})
+    summary.update(
+        {
+            "task_id": task.id,
+            "task_name": task.name,
+            "status": task.status,
+            "finished_at": task.finished_at.isoformat() if task.finished_at else None,
+        }
+    )
+    report = existing or InspectionReport(task_id=task.id)
+    report.application_id = task.application_id
+    report.environment_id = task.environment_id
+    report.status = "generated" if task.status == "finished" else task.status
+    report.summary = summary
+    report.html_path = str(html_path)
+    db.add(report)
+    db.flush()
+    return report
 
 
 def build_docx_report(db: Session, task_ids: list[str], output_path: Path) -> Path:

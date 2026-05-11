@@ -824,6 +824,9 @@ const state = {
   },
   environmentStatusFilter: "all",
   taskCreateDefaults: null,
+  resourceCreateDefaults: null,
+  applicationCreateDefaults: null,
+  workflowCallback: null,
   taskCreateDraft: null,
   issueDetailId: null,
   issueDetailTab: "overview",
@@ -1361,6 +1364,11 @@ function bulkDeleteButton(scope) {
   return `<button class="btn danger small bulk-delete ${count ? "active" : ""}" data-action="delete-selected" data-scope="${scope}" ${count ? "" : "disabled"}>${icon("trash")} ${t("action.deleteSelected")} ${count ? `(${count})` : ""}</button>`;
 }
 
+function bulkResolveIssuesButton() {
+  const count = selectedCount("issues");
+  return `<button class="btn primary small ${count ? "active" : ""}" data-action="bulk-resolve-issues" ${count ? "" : "disabled"}>${icon("check")} ${state.lang === "zh" ? "标记已修复" : "Mark resolved"} ${count ? `(${count})` : ""}</button>`;
+}
+
 function tableToolbar(scope, title, subtitle, total, extra = "", allowDelete = false) {
   const hasTitle = Boolean(title || subtitle);
   const hasExtra = Boolean(extra);
@@ -1651,14 +1659,63 @@ function aiBotIcon() {
 
 function aiChatMessageHtml(message, scope = "page") {
   const isUser = message.role === "user";
+  const workflow = message.meta?.workflow;
   return `
     <div class="ai-chat-row ${isUser ? "user" : "assistant"}">
       <div class="ai-chat-bubble">
         <div class="ai-message-content">${isUser ? escapeHtml(message.content) : renderAssistantMarkdown(message.content, scope)}</div>
+        ${!isUser && workflow && workflow.status !== "not_required" ? aiWorkflowHtml(workflow) : ""}
         <span>${escapeHtml(message.time || currentTimeLabel())}</span>
       </div>
     </div>
   `;
+}
+
+function aiWorkflowHtml(workflow) {
+  const steps = workflow.steps || [];
+  if (!steps.length) return "";
+  const labelMap = {
+    completed: state.lang === "zh" ? "已完成" : "Done",
+    awaiting_confirmation: state.lang === "zh" ? "待确认" : "Confirm",
+    blocked: state.lang === "zh" ? "待补充" : "Blocked",
+    pending: state.lang === "zh" ? "待执行" : "Pending",
+    running: state.lang === "zh" ? "执行中" : "Running",
+    skipped: state.lang === "zh" ? "跳过" : "Skipped",
+  };
+  return `
+    <div class="ai-workflow-card">
+      <div class="ai-workflow-title">${state.lang === "zh" ? "AI 编排步骤" : "AI Workflow"}</div>
+      ${steps.map((step, index) => `
+        <div class="ai-workflow-step ${escapeHtml(step.status || "")}">
+          <span>${index + 1}</span>
+          <div><strong>${escapeHtml(step.title || step.action_name || "-")}</strong><small>${escapeHtml(step.summary || "")}</small></div>
+          <em>${escapeHtml(labelMap[step.status] || step.status || "-")}</em>
+        </div>
+      `).join("")}
+      ${aiWorkflowActionsHtml(workflow)}
+    </div>
+  `;
+}
+
+function aiWorkflowActionsHtml(workflow) {
+  const workflowId = workflow.id || "";
+  const actions = (workflow.next_actions || []).map((item) => {
+    const classes = `btn ${item.style === "primary" ? "primary" : ""} micro`.trim();
+    return `<button class="${classes}" type="button" data-action="workflow-next-action" data-workflow-id="${escapeHtml(workflowId)}" data-ui-action="${escapeHtml(item.ui_action || "")}" data-action-name="${escapeHtml(item.action_name || "")}" data-event-name="${escapeHtml(item.event || "")}" data-params="${escapeHtml(encodeWorkflowParams(item.params || {}))}" data-confirm="${item.requires_confirmation ? "true" : "false"}">${escapeHtml(item.label || item.action_name || "-")}</button>`;
+  });
+  return actions.length ? `<div class="ai-workflow-actions">${actions.join("")}</div>` : "";
+}
+
+function encodeWorkflowParams(params) {
+  return encodeURIComponent(JSON.stringify(params || {}));
+}
+
+function decodeWorkflowParams(value) {
+  try {
+    return JSON.parse(decodeURIComponent(value || "%7B%7D"));
+  } catch {
+    return {};
+  }
 }
 
 function inlineMarkdown(text) {
@@ -3318,8 +3375,17 @@ function renderReports() {
 }
 
 function renderReportHistory() {
-  const finished = state.data.tasks.filter((task) => ["finished", "failed"].includes(task.status));
-  const filtered = filterRows("reports", finished, ["name", "status", "id"]);
+  const persistedReports = state.data.inspection_reports || [];
+  const finished = persistedReports.length
+    ? persistedReports.map((report) => ({
+      ...report,
+      id: report.task_id || report.id,
+      name: report.task_name || report.summary?.task_name || report.id,
+      status: report.task_status || report.status,
+      finished_at: report.finished_at || report.created_at,
+    }))
+    : state.data.tasks.filter((task) => ["finished", "failed"].includes(task.status));
+  const filtered = filterRows("reports", finished, ["name", "status", "id", "application_name", "environment_name"]);
   const pageInfo = paginate("reports", filtered);
   const mergeControls = `
     <select class="select compact-select" id="merge-format"><option value="html">HTML</option><option value="docx">DOCX</option><option value="pdf">PDF</option></select>
@@ -3355,7 +3421,7 @@ function renderReportHistory() {
 }
 
 function issueTaskName(issue) {
-  return issue.task_name || issue.task_id || "-";
+  return issue.task_name || "-";
 }
 
 function issueEnvironmentName(issue) {
@@ -3447,13 +3513,16 @@ function renderIssuesPanel() {
           <input value="${escapeHtml(state.filters.issues || "")}" data-filter-scope="issues" placeholder="${state.lang === "zh" ? "搜索问题名称、资源、IP..." : "Search issue, resource, IP..."}">
         </label>
         <button class="btn small" data-action="reset-issue-filters">${state.lang === "zh" ? "重置" : "Reset"}</button>
+        ${bulkResolveIssuesButton()}
+        ${bulkDeleteButton("issues")}
       </div>
       <div class="table-wrap problem-table-wrap">
         <table class="table problem-table">
-          <thead><tr><th>${state.lang === "zh" ? "问题名称" : "Issue"}</th><th>${state.lang === "zh" ? "严重等级" : "Severity"}</th><th>${state.lang === "zh" ? "所属任务" : "Task"}</th><th>${state.lang === "zh" ? "所属环境" : "Environment"}</th><th>${state.lang === "zh" ? "资源名称 / IP" : "Resource / IP"}</th><th>${state.lang === "zh" ? "问题类型" : "Type"}</th><th>${state.lang === "zh" ? "AI 分析状态" : "AI Status"}</th><th>${state.lang === "zh" ? "处理状态" : "Status"}</th><th>${state.lang === "zh" ? "发现时间" : "Found At"}</th><th>${t("table.action")}</th></tr></thead>
+          <thead><tr><th class="select-col">${selectAllCell("issues", pageInfo.items)}</th><th>${state.lang === "zh" ? "问题名称" : "Issue"}</th><th>${state.lang === "zh" ? "严重等级" : "Severity"}</th><th>${state.lang === "zh" ? "所属任务" : "Task"}</th><th>${state.lang === "zh" ? "所属环境" : "Environment"}</th><th>${state.lang === "zh" ? "资源名称 / IP" : "Resource / IP"}</th><th>${state.lang === "zh" ? "问题类型" : "Type"}</th><th>${state.lang === "zh" ? "AI 分析状态" : "AI Status"}</th><th>${state.lang === "zh" ? "处理状态" : "Status"}</th><th>${state.lang === "zh" ? "发现时间" : "Found At"}</th><th>${t("table.action")}</th></tr></thead>
           <tbody>
             ${pageInfo.items.map((issue) => `
               <tr>
+                <td class="select-col">${checkboxCell("issues", issue.id)}</td>
                 <td><strong>${escapeHtml(issue.summary || "-")}</strong></td>
                 <td>${dashboardSeverityLabel(issue)}</td>
                 <td>${escapeHtml(issueTaskName(issue))}</td>
@@ -3465,7 +3534,7 @@ function renderIssuesPanel() {
                 <td>${formatDate(issue.created_at)}</td>
                 <td><button class="btn ghost small link-like" data-action="open-issue-detail" data-id="${issue.id}">${state.lang === "zh" ? "详情" : "Details"}</button></td>
               </tr>
-            `).join("") || `<tr><td colspan="10"><div class="empty">${t("search.empty")}</div></td></tr>`}
+            `).join("") || `<tr><td colspan="11"><div class="empty">${t("search.empty")}</div></td></tr>`}
           </tbody>
         </table>
       </div>
@@ -3547,6 +3616,8 @@ function renderIssueDetail(issue) {
         <div class="problem-detail-actions">
           <button class="btn primary small" data-action="issue-status" data-id="${issue.id}" data-status="resolved">${state.lang === "zh" ? "标记已修复" : "Mark resolved"}</button>
           <button class="btn small" data-action="run-issue-diagnosis" data-id="${issue.id}">${state.lang === "zh" ? "重新诊断" : "Diagnose"}</button>
+          ${issue.report_id || issue.report_name ? `<button class="btn small" data-action="issue-view-report" data-id="${issue.id}">${state.lang === "zh" ? "查看报告" : "View report"}</button>` : ""}
+          ${issue.task_name ? `<button class="btn small" data-action="issue-view-task" data-id="${issue.id}">${state.lang === "zh" ? "查看任务" : "View task"}</button>` : ""}
           <button class="btn small" data-action="back-issue-list">${state.lang === "zh" ? "返回列表" : "Back"}</button>
         </div>
       </div>
@@ -3627,9 +3698,23 @@ function renderIssueAnalysis(issue, insight) {
 
 function renderIssueEvidence(issue, insight) {
   const evidence = insight.evidence || [];
+  const snapshot = issue.evidence_snapshot || {};
+  const resourceSnapshot = snapshot.resource || {};
+  const itemSnapshot = snapshot.item || {};
+  const rawEvidence = [snapshot.output, snapshot.error_message].filter(Boolean).join("\n\n");
   return `
     <section class="problem-detail-card">
       <h3>${state.lang === "zh" ? "诊断工具证据" : "Diagnostic Evidence"}</h3>
+      ${Object.keys(snapshot).length ? `
+        <div class="evidence-snapshot">
+          <dl class="detail-dl">
+            <dt>${state.lang === "zh" ? "触发规则" : "Rule"}</dt><dd>${escapeHtml(itemSnapshot.name || issue.item_id || "-")}</dd>
+            <dt>${state.lang === "zh" ? "来源资产" : "Asset"}</dt><dd>${escapeHtml(resourceSnapshot.name || issue.resource_name || "-")} ${resourceSnapshot.ip || issue.resource_ip ? `(${escapeHtml(resourceSnapshot.ip || issue.resource_ip)})` : ""}</dd>
+            <dt>${state.lang === "zh" ? "来源报告" : "Report"}</dt><dd>${escapeHtml(issue.report_name || issue.report_id || "-")}</dd>
+          </dl>
+          ${rawEvidence ? `<pre>${escapeHtml(rawEvidence)}</pre>` : ""}
+        </div>
+      ` : ""}
       <div class="evidence-list">
         ${evidence.length ? evidence.map((item) => `
           <article>
@@ -3656,11 +3741,24 @@ function renderIssueSuggestion(issue, insight) {
 }
 
 function renderIssueFixTask(issue) {
+  const tasks = (state.data.repair_tasks || []).filter((task) => task.issue_id === issue.id);
   return `
     <section class="problem-detail-card">
       <h3>${state.lang === "zh" ? "修复任务" : "Fix Task"}</h3>
-      <p>${state.lang === "zh" ? "修复任务会由问题的修复建议和工单闭环生成，当前阶段先展示人工处理入口。" : "Fix tasks will be generated from remediation suggestions and tickets. Manual handling is shown for now."}</p>
-      <button class="btn primary small" data-action="issue-status" data-id="${issue.id}" data-status="in_progress">${state.lang === "zh" ? "开始处理" : "Start processing"}</button>
+      <p>${state.lang === "zh" ? "可基于根因分析与修复建议生成修复任务，后续用于负责人跟进、验证和闭环。" : "Create remediation tasks from analysis and suggestions for owner follow-up, verification and closure."}</p>
+      <div class="row-actions">
+        <button class="btn primary small" data-action="create-repair-task" data-id="${issue.id}">${state.lang === "zh" ? "创建修复任务" : "Create fix task"}</button>
+        <button class="btn small" data-action="issue-status" data-id="${issue.id}" data-status="in_progress">${state.lang === "zh" ? "开始处理" : "Start processing"}</button>
+      </div>
+      <div class="repair-task-list">
+        ${tasks.map((task) => `
+          <div class="repair-task-card">
+            <strong>${escapeHtml(task.title || "-")}</strong>
+            <span class="status ${statusClass(task.status)}">${escapeHtml(statusText(task.status || "pending"))}</span>
+            <small>${escapeHtml(task.assignee || "-")} · ${formatDate(task.created_at)}</small>
+          </div>
+        `).join("") || `<div class="empty compact">${state.lang === "zh" ? "暂无修复任务" : "No fix tasks yet"}</div>`}
+      </div>
     </section>
   `;
 }
@@ -4940,12 +5038,12 @@ function modalConfig(type, id) {
     const defaults = isNew ? (state.taskCreateDefaults || {}) : {};
     const draft = state.taskCreateDraft || {};
     const selectedEnvironmentId = draft.environment_id || task?.environment_id || config.environment_id || defaults.environment_id || "";
-    const selectedResourceIds = new Set(draft.resource_ids || task?.resource_ids || []);
-    const selectedServiceIds = new Set(draft.service_ids || config.service_ids || []);
+    const selectedResourceIds = new Set(draft.resource_ids || task?.resource_ids || defaults.resource_ids || []);
+    const selectedServiceIds = new Set(draft.service_ids || config.service_ids || defaults.service_ids || []);
     const executionMode = editingPlan ? "periodic" : draft.execution_mode || config.execution_mode || "once";
     const inspectionScope = draft.inspection_scope || defaults.inspection_scope || config.inspection_scope || (task?.environment_id ? "environment" : "asset");
     const autoItemIds = autoRuleIdsForTaskDraft({ ...draft, environment_id: selectedEnvironmentId, inspection_scope: inspectionScope, resource_ids: [...selectedResourceIds], service_ids: [...selectedServiceIds] });
-    const selectedItemIds = new Set((draft.item_ids && draft.item_ids.length ? draft.item_ids : task?.item_ids || [...autoItemIds]));
+    const selectedItemIds = new Set((draft.item_ids && draft.item_ids.length ? draft.item_ids : task?.item_ids || defaults.item_ids || [...autoItemIds]));
     const selectedNotify = new Set(draft.notify_channels || config.notify_channels || []);
     const selectedReminders = new Set(draft.reminder_rules || config.reminder_rules || []);
     const selectedTaskTags = draft.task_tags ?? (Array.isArray(config.task_tags) ? config.task_tags.join("，") : "");
@@ -5122,7 +5220,8 @@ function modalConfig(type, id) {
   }
   if (type === "application") {
     const isNew = id === "new";
-    const app = isNew ? { name: "", owner: "SRE", description: "", status: "active", env_type: "prod" } : applications().find((item) => item.id === id);
+    const defaults = isNew ? (state.applicationCreateDefaults || {}) : {};
+    const app = isNew ? { name: defaults.name || "", owner: defaults.owner || "SRE", description: defaults.description || "", status: defaults.status || "active", env_type: defaults.env_type || "prod" } : applications().find((item) => item.id === id);
     if (!app) return null;
     const primaryEnv = isNew ? null : environments().find((env) => env.application_id === app.id || env.application_name === app.name);
     const envType = primaryEnv?.env_type || app.env_type || "prod";
@@ -5268,17 +5367,18 @@ function modalConfig(type, id) {
   }
   if (type === "resource") {
     const isNew = id === "new";
-    const firstType = resourceFormTypeOptions()[0]?.[0] || "host";
+    const defaults = isNew ? (state.resourceCreateDefaults || {}) : {};
+    const firstType = defaults.type || resourceFormTypeOptions()[0]?.[0] || "host";
     const selectedType = resourceTypes().find((item) => item.key === firstType);
     const res = isNew
       ? {
-          name: "",
+          name: defaults.name || "",
           type: firstType,
-          ip: "",
-          port: selectedType?.default_port || 22,
-          username: "",
-          credential_type: "password",
-          environment_bindings: [],
+          ip: defaults.ip || "",
+          port: defaults.port || selectedType?.default_port || 22,
+          username: defaults.username || "",
+          credential_type: defaults.credential_type || "password",
+          environment_bindings: defaults.environment_bindings || (defaults.environment_id ? [{ environment_id: defaults.environment_id }] : []),
           credential_configured: false,
         }
       : state.data.resources.find((item) => item.id === id);
@@ -5366,6 +5466,8 @@ function openModal(type, id) {
     state.taskCreateDraft = null;
   }
   if (type !== "task-create") state.taskCreateDefaults = null;
+  if (type !== "resource") state.resourceCreateDefaults = null;
+  if (type !== "application") state.applicationCreateDefaults = null;
   state.modal = { type, id };
   render();
 }
@@ -5375,6 +5477,9 @@ function closeModal() {
     state.taskCreateDefaults = null;
     state.taskCreateDraft = null;
   }
+  if (state.modal?.type === "resource") state.resourceCreateDefaults = null;
+  if (state.modal?.type === "application") state.applicationCreateDefaults = null;
+  state.workflowCallback = null;
   state.modal = null;
   render();
 }
@@ -5514,10 +5619,52 @@ async function loadAiChatSession(sessionId) {
     role: message.role,
     content: message.content,
     time: formatSessionTime(message.created_at),
+    meta: message.meta || {},
   }));
   state.aiAssistant.typing = false;
   render();
   scrollAiChatToBottom("page");
+}
+
+function aiScopeFromElement(element) {
+  return element.closest(".ai-chat-window") ? "floating" : "page";
+}
+
+function appendWorkflowResponse(response, scope = "page") {
+  const workflow = response.workflow || response;
+  const actionResult = response.action_result || {};
+  const message = actionResult.summary || response.message || workflow.last_error || (state.lang === "zh" ? "工作流已更新" : "Workflow updated");
+  const assistant = assistantStateFor(scope);
+  assistant.messages.push({
+    role: "assistant",
+    content: message,
+    time: currentTimeLabel(),
+    meta: { workflow },
+  });
+  render();
+  scrollAiChatToBottom(scope);
+}
+
+async function runWorkflowAction(workflowId, actionName, params = {}, confirmed = false, scope = "page") {
+  if (!workflowId || !actionName) return;
+  const response = await api(`/api/ai/workflows/${encodeURIComponent(workflowId)}/actions/${encodeURIComponent(actionName)}`, {
+    method: "POST",
+    body: JSON.stringify({ params, confirmed }),
+  });
+  appendWorkflowResponse(response, scope);
+  await loadBootstrap();
+  render();
+}
+
+async function sendWorkflowEvent(eventName, payload = {}) {
+  const callback = state.workflowCallback;
+  if (!callback?.workflow_id || !eventName) return;
+  const response = await api(`/api/ai/workflows/${encodeURIComponent(callback.workflow_id)}/events`, {
+    method: "POST",
+    body: JSON.stringify({ event: eventName, payload }),
+  });
+  appendWorkflowResponse({ workflow: response, message: state.lang === "zh" ? "我已收到补充信息，继续推进流程。" : "Workflow continued." }, callback.scope || "page");
+  state.workflowCallback = null;
 }
 
 async function sendAiChat(message, scope = "page") {
@@ -5543,7 +5690,7 @@ async function sendAiChat(message, scope = "page") {
     const toolHint = (response.tool_runs || []).length
       ? `\n\n${state.lang === "zh" ? "工具证据摘要" : "Tool evidence"}：${(response.tool_runs || []).map((tool) => tool.name).join("、")}`
       : "";
-    assistant.messages.push({ role: "assistant", content: `${response.message || t("ai.chatFallback")}${toolHint}`, time: currentTimeLabel() });
+    assistant.messages.push({ role: "assistant", content: `${response.message || t("ai.chatFallback")}${toolHint}`, time: currentTimeLabel(), meta: { workflow: response.workflow } });
     if (scope === "page") await loadAiChatSessions();
   } catch (err) {
     assistant.messages.push({ role: "assistant", content: `${t("ai.sendFailed")}：${friendlyError(err.message)}`, time: currentTimeLabel() });
@@ -5836,6 +5983,12 @@ async function startServiceDiscovery(resourceId, payload) {
     (result.services || []).forEach((service) => existing.set(service.id, service));
     state.data.discovered_services = [...existing.values()];
     const discoveredCount = (result.services || []).length;
+    if (state.workflowCallback?.type === "service-discovery") {
+      await sendWorkflowEvent(state.workflowCallback.event || "services_discovered", {
+        resource_id: resourceId,
+        service_ids: (result.services || []).map((service) => service.id).filter(Boolean),
+      });
+    }
     toast(discoveredCount
       ? `${t("toast.servicesDiscovered")}：${discoveredCount}`
       : (state.lang === "zh" ? "服务发现完成，未发现符合条件的服务" : "Discovery finished. No matching services found."));
@@ -5940,6 +6093,16 @@ async function performDeleteSelected() {
   const modal = state.modal;
   if (!modal || modal.type !== "delete-confirm") return;
   const { scope, ids = [] } = modal;
+  if (scope === "issues") {
+    await api("/api/issues/bulk/delete", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    });
+    selectionSet(scope).clear();
+    state.modal = null;
+    await refreshData(t("toast.deleted"));
+    return;
+  }
   for (const id of ids) {
     const endpoint = deleteEndpoint(scope, id);
     if (endpoint) {
@@ -6078,12 +6241,42 @@ document.addEventListener("submit", async (event) => {
     try {
       const isCreate = id === "new" || String(id).startsWith("env:");
       const method = isCreate ? "POST" : "PATCH";
-      await api(editEndpoint(type, id), {
+      const result = await api(editEndpoint(type, id), {
         method,
         body: JSON.stringify(editPayloadFromForm(form)),
       });
+      const callback = state.workflowCallback;
+      if (callback?.type === type) {
+        if (type === "application") {
+          await sendWorkflowEvent(callback.event || "environment_created", {
+            application_id: result.id,
+            application_name: result.name,
+            name: result.name,
+            env_type: form.elements.env_type?.value || callback.params?.env_type || "prod",
+          });
+        } else if (type === "resource") {
+          await sendWorkflowEvent(callback.event || "asset_created", {
+            resource_id: result.id,
+            id: result.id,
+            environment_id: callback.params?.environment_id || "",
+          });
+        } else if (type === "environment-rules") {
+          await sendWorkflowEvent(callback.event || "rules_confirmed", {
+            environment_id: id,
+            rule_set_ids: result.rule_set_ids || editPayloadFromForm(form).rule_set_ids || [],
+          });
+        } else if (type === "task-create") {
+          await sendWorkflowEvent(callback.event || "task_created", {
+            task_id: result.task?.id,
+            id: result.task?.id,
+            mode: result.mode,
+          });
+        }
+      }
       state.modal = null;
       if (type === "task-create") state.taskCreateDefaults = null;
+      if (type === "resource") state.resourceCreateDefaults = null;
+      if (type === "application") state.applicationCreateDefaults = null;
       await refreshData(t("toast.saved"));
     } catch (err) {
       const message = friendlyError(err.message);
@@ -6322,6 +6515,18 @@ document.addEventListener("click", async (event) => {
       await deleteSelected(target.dataset.scope);
     } else if (action === "confirm-delete") {
       await performDeleteSelected();
+    } else if (action === "bulk-resolve-issues") {
+      const ids = [...selectionSet("issues")];
+      if (!ids.length) {
+        toast(t("toast.noSelection"), "error");
+        return;
+      }
+      await api("/api/issues/bulk/resolve", {
+        method: "POST",
+        body: JSON.stringify({ ids, status: "resolved", resolution_note: "Bulk marked as resolved from OpsRadar console" }),
+      });
+      selectionSet("issues").clear();
+      await refreshData(t("toast.issueUpdated"));
     } else if (action === "search-result") {
       state.view = target.dataset.view || "dashboard";
       if (target.dataset.tab) {
@@ -6362,6 +6567,59 @@ document.addEventListener("click", async (event) => {
       await sendAiChat(chatRoot?.querySelector("textarea")?.value, target.dataset.chatScope || "page");
     } else if (action === "ai-quick-prompt") {
       await sendAiChat(target.dataset.prompt, target.dataset.chatScope || "page");
+    } else if (action === "workflow-next-action") {
+      const workflowId = target.dataset.workflowId || "";
+      const uiAction = target.dataset.uiAction || "";
+      const actionName = target.dataset.actionName || "";
+      const eventName = target.dataset.eventName || "";
+      const params = decodeWorkflowParams(target.dataset.params);
+      const scope = aiScopeFromElement(target);
+      if (uiAction === "run_workflow_action") {
+        await runWorkflowAction(workflowId, actionName, params, target.dataset.confirm === "true", scope);
+      } else if (uiAction === "open_application_modal") {
+        state.workflowCallback = { workflow_id: workflowId, event: eventName || "environment_created", type: "application", params, scope };
+        state.applicationCreateDefaults = {
+          name: params.name || "",
+          env_type: params.env_type || "prod",
+        };
+        openModal("application", "new");
+      } else if (uiAction === "open_resource_modal") {
+        state.workflowCallback = { workflow_id: workflowId, event: eventName || "asset_created", type: "resource", params, scope };
+        state.resourceCreateDefaults = {
+          type: "host",
+          port: 22,
+          environment_id: params.environment_id || "",
+        };
+        openModal("resource", "new");
+      } else if (uiAction === "open_environment_rules_modal") {
+        state.workflowCallback = { workflow_id: workflowId, event: eventName || "rules_confirmed", type: "environment-rules", params, scope };
+        openModal("environment-rules", params.environment_id || params.id || "");
+      } else if (uiAction === "open_task_modal") {
+        state.workflowCallback = { workflow_id: workflowId, event: eventName || "task_created", type: "task-create", params, scope };
+        state.taskCreateDefaults = {
+          inspection_scope: params.environment_id ? "environment" : "asset",
+          environment_id: params.environment_id || "",
+          resource_ids: params.resource_ids || [],
+          item_ids: [],
+          name: params.name || "",
+        };
+        openModal("task-create", "new");
+      } else if (uiAction === "navigate") {
+        state.view = params.view || state.view;
+        if (params.tab) state.tabs[state.view] = params.tab;
+        localStorage.setItem("opsradar_view", state.view);
+        render();
+      } else if (uiAction === "select_environment") {
+        state.workflowCallback = { workflow_id: workflowId, event: eventName || "environment_selected", type: "application", params, scope };
+        state.view = "resources";
+        state.tabs.environments = "applications";
+        render();
+      } else if (uiAction === "select_assets") {
+        state.workflowCallback = { workflow_id: workflowId, event: eventName || "asset_selected", type: "resource", params, scope };
+        state.view = "resources";
+        state.tabs.environments = "resources";
+        render();
+      }
     } else if (action === "clear-ai-chat") {
       clearAiChat(target.dataset.chatScope || "page");
     } else if (action === "load-ai-session") {
@@ -6501,6 +6759,24 @@ document.addEventListener("click", async (event) => {
       state.issueDetailId = target.dataset.id;
       state.issueDetailTab = "overview";
       render();
+    } else if (action === "issue-view-report") {
+      const issue = (state.data.issues || []).find((item) => item.id === target.dataset.id);
+      state.view = "reports";
+      state.tabs.reports = "history";
+      state.filters.reports = issue?.report_name || issue?.task_name || "";
+      resetPage("reports");
+      localStorage.setItem("opsradar_view", state.view);
+      localStorage.setItem("opsradar_tab_reports", state.tabs.reports);
+      render();
+    } else if (action === "issue-view-task") {
+      const issue = (state.data.issues || []).find((item) => item.id === target.dataset.id);
+      state.view = "tasks";
+      state.tabs.tasks = "tasks";
+      state.filters.tasks = issue?.task_name || "";
+      resetPage("tasks");
+      localStorage.setItem("opsradar_view", state.view);
+      localStorage.setItem("opsradar_tab_tasks", state.tabs.tasks);
+      render();
     } else if (action === "back-issue-list") {
       state.issueDetailId = null;
       render();
@@ -6510,6 +6786,24 @@ document.addEventListener("click", async (event) => {
     } else if (action === "run-issue-diagnosis") {
       await api(`/api/ai/analyze/issue/${encodeURIComponent(target.dataset.id)}`, { method: "POST" });
       await refreshData(state.lang === "zh" ? "诊断已生成" : "Diagnosis generated");
+    } else if (action === "create-repair-task") {
+      const issue = (state.data.issues || []).find((item) => item.id === target.dataset.id);
+      if (!issue) return;
+      const insight = issue.insight || {};
+      await api("/api/repair-tasks", {
+        method: "POST",
+        body: JSON.stringify({
+          issue_id: issue.id,
+          title: `${state.lang === "zh" ? "修复" : "Fix"}：${issue.summary || issue.id}`,
+          status: "pending",
+          assignee: issue.assignee || "Unassigned",
+          suggested_steps: insight.steps || [],
+          verification: insight.verification || "",
+          created_by_ai: Boolean(insight.id),
+        }),
+      });
+      state.issueDetailTab = "fix";
+      await refreshData(state.lang === "zh" ? "修复任务已创建" : "Fix task created");
     } else if (action === "issue-to-knowledge") {
       await api(`/api/issues/${encodeURIComponent(target.dataset.id)}/knowledge`, { method: "POST" });
       await refreshData(t("toast.knowledgeCreated"));

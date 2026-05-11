@@ -20,6 +20,7 @@ OpsRadar production deployment uses six services:
 5. The API or beat process marks the task `queued` and publishes a Celery message through Redis.
 6. A worker consumes the message, decrypts credentials in memory, connects to the host with AsyncSSH, runs shell checks, masks sensitive output and writes results/logs/issues to PostgreSQL.
 7. Reports are generated from persisted results and stored in the report volume.
+8. The AI assistant reads the persisted workflow state, waits for user callbacks after modal submissions, and continues the original inspection workflow until report and issue synchronization are complete.
 
 ## Data Safety
 
@@ -48,4 +49,5 @@ python3 -m backend.app.cli init-admin
 - Redis stores queue state; keep append-only mode enabled for Compose deployments.
 - Rotate `OPSRADAR_SECRET_KEY` and `OPSRADAR_ENCRYPTION_KEY` through the server secret management process.
 - First production release only executes host shell inspections. SQL, HTTP and SSL checks remain template metadata until their executors are implemented.
+- AI assistant workflows are persisted in PostgreSQL; the frontend only renders workflow state and next actions returned by the API.
 - Add external observability in production: container logs, PostgreSQL backups, worker queue depth, task failure rate and Nginx access/error logs.

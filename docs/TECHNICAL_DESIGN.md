@@ -4,7 +4,7 @@
 
 本文档面向 OpsRadar 的交付、研发、运维和二次开发人员，说明系统目标、运行架构、核心模块、数据模型、任务调度链路、安全设计、部署运维方式以及后续扩展边界。
 
-OpsRadar 是一个运维自动化巡检管理平台。当前版本定位为生产级单机 Docker Compose 交付形态，采用 PostgreSQL、Redis、Celery worker、FastAPI 和 Nginx 组成运行栈。第一阶段真实巡检能力聚焦 Linux/Unix 主机 SSH 巡检，支持密码和私钥凭据、巡检模板、任务中心、报告导出、异常闭环、RBAC 权限和审计日志。
+OpsRadar 是一个运维自动化巡检管理平台。当前版本定位为生产级单机 Docker Compose 交付形态，采用 PostgreSQL、Redis、Celery worker、FastAPI 和 Nginx 组成运行栈。第一阶段真实巡检能力聚焦 Linux/Unix 主机 SSH 巡检，支持密码和私钥凭据、巡检模板、AI 工作流编排、报告导出、异常闭环、RBAC 权限和审计日志。
 
 ## 2. 技术栈
 
@@ -248,7 +248,58 @@ API 返回资源时不会返回明文或密文凭据，只返回：
 | `failed` | 投递或执行失败 |
 | `cancelled` | 已取消或收到取消请求 |
 
-### 5.6 巡检执行
+### 5.7 AI 工作流
+
+AI 助手不直接执行数据库操作，也不输出伪造结果。它只做三件事：
+
+1. 识别用户意图。
+2. 生成并推进持久化 workflow。
+3. 在需要用户参与时，返回可点击动作并等待回调。
+
+核心状态机：
+
+```mermaid
+stateDiagram-v2
+  [*] --> START
+  START --> INTENT_PARSED
+  INTENT_PARSED --> WAITING_ENV_CREATE
+  WAITING_ENV_CREATE --> WAITING_ENV_CONFIRM
+  WAITING_ENV_CONFIRM --> WAITING_ASSET_CREATE
+  WAITING_ASSET_CREATE --> WAITING_SCOPE_CONFIRM
+  WAITING_SCOPE_CONFIRM --> WAITING_CONNECTION_TEST
+  WAITING_CONNECTION_TEST --> WAITING_SERVICE_DISCOVERY
+  WAITING_SERVICE_DISCOVERY --> WAITING_RULE_SELECT
+  WAITING_RULE_SELECT --> WAITING_TASK_CREATE
+  WAITING_TASK_CREATE --> WAITING_TASK_START
+  WAITING_TASK_START --> TASK_RUNNING
+  TASK_RUNNING --> WAITING_REPORT_GENERATE
+  WAITING_REPORT_GENERATE --> WAITING_ISSUES_SYNC
+  WAITING_ISSUES_SYNC --> AI_SUMMARIZED
+  AI_SUMMARIZED --> DONE
+  START --> NO_WORKFLOW
+  START --> CANCELLED
+```
+
+工作流回调事件：
+
+- `environment_created`
+- `environment_selected`
+- `asset_created`
+- `asset_selected`
+- `connection_tested`
+- `services_discovered`
+- `rules_confirmed`
+- `task_created`
+- `task_finished`
+
+交互原则：
+
+- 用户发起巡检、修复、分析、创建任务时，后端先判断意图，再返回工作流。
+- 缺环境、缺资产、缺规则时，不终止；返回弹窗入口并继续原流程。
+- 所有动作结果都必须来自平台真实 Action，不允许模型凭空编造。
+- 巡检完成后，后端继续推进到报告、问题和 AI 总结，再提供下一步按钮。
+
+### 5.8 巡检执行
 
 执行层由 `ShellExecutor` 和 `JudgementEngine` 组成。
 
@@ -288,7 +339,7 @@ sequenceDiagram
 - 连接失败、认证失败、命令失败、超时失败分类
 - 结果脱敏后入库
 
-### 5.7 判定规则
+### 5.9 判定规则
 
 `JudgementEngine` 当前支持：
 
@@ -302,7 +353,7 @@ sequenceDiagram
 
 命令退出码非 0 时默认判定为 `fail`。
 
-### 5.8 报告与异常
+### 5.10 报告与异常
 
 任务执行结果写入 `TaskResult`。当结果为 `fail` 或 `exception` 时，系统创建 `Issue` 用于异常闭环。
 
@@ -314,7 +365,7 @@ sequenceDiagram
 
 报告生成依赖持久化数据，不依赖前端模拟数据。PDF 导出需要 `OPSRADAR_CHROME_PATH` 指向可用 Chrome/Chromium。
 
-### 5.9 审计日志
+### 5.11 审计日志
 
 审计日志分为：
 
@@ -344,6 +395,8 @@ sequenceDiagram
 | `applications` | `Application` | 业务系统 |
 | `app_environments` | `AppEnvironment` | 应用环境 |
 | `environment_resources` | `EnvironmentResource` | 资源与应用环境的内部绑定关系 |
+| `ai_workflows` | `AiWorkflow` | AI 工作流状态机 |
+| `ai_workflow_events` | `AiWorkflowEvent` | 工作流事件记录 |
 | `analysis_rules` | `AnalysisRule` | 根因分析规则 |
 | `issue_insights` | `IssueInsight` | 异常分析和建议 |
 | `inspection_items` | `InspectionItem` | 巡检指标/模板 |
@@ -359,13 +412,10 @@ sequenceDiagram
 
 ```mermaid
 erDiagram
-  RESOURCE_GROUP ||--o{ RESOURCE : contains
-  RESOURCE_GROUP ||--o{ TASK : owns
   APPLICATION ||--o{ APP_ENVIRONMENT : owns
   APP_ENVIRONMENT ||--o{ ENVIRONMENT_RESOURCE : binds
-  APP_ENVIRONMENT ||--o{ SERVICE_COMPONENT : contains
   RESOURCE ||--o{ ENVIRONMENT_RESOURCE : member
-  RESOURCE ||--o{ SERVICE_COMPONENT : hosts
+  AI_WORKFLOW ||--o{ AI_WORKFLOW_EVENT : emits
   USER ||--o{ TASK : creates
   APP_ENVIRONMENT ||--o{ TASK : scopes
   TASK ||--o{ TASK_RESULT : has
@@ -699,6 +749,19 @@ docker compose --env-file .env exec opsradar-api python3 -m backend.app.cli chec
 8. 查看执行日志。
 9. 查看巡检报告。
 10. 对异常项进行处理闭环。
+
+### 14.3 AI 工作流验证
+
+```text
+帮我给生产环境创建一次 JumpServer 集群巡检
+```
+
+期望行为：
+
+- 识别为 `create_and_run_inspection`
+- 如果没有对应应用环境，提示创建或选择应用环境
+- 资产、连通性、服务发现、规则集、任务创建、执行、报告、问题和 AI 总结按状态机推进
+- 每次用户完成弹窗后，通过 workflow callback 继续原流程
 
 ## 15. 当前边界
 

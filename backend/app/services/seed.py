@@ -57,6 +57,7 @@ def seed_builtin_data(db: Session) -> None:
                 "tasks:*",
                 "reports:*",
                 "issues:*",
+                "repair_tasks:*",
                 "audit:read",
                 "analysis_rules:read",
                 "resource_center:read",

@@ -265,6 +265,25 @@ class Task(Base):
     logs = relationship("TaskLog", back_populates="task", cascade="all, delete-orphan")
 
 
+class InspectionReport(Base):
+    __tablename__ = "inspection_reports"
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("rpt"))
+    task_id = Column(String(40), ForeignKey("inspection_tasks.id", ondelete="SET NULL"), index=True)
+    environment_id = Column(String(40), ForeignKey("app_environments.id", ondelete="SET NULL"), index=True)
+    application_id = Column(String(40), ForeignKey("applications.id", ondelete="SET NULL"), index=True)
+    status = Column(String(24), default="generated", nullable=False)
+    summary = Column(JSON, default=dict, nullable=False)
+    html_path = Column(Text, default="", nullable=False)
+    docx_path = Column(Text, default="", nullable=False)
+    pdf_path = Column(Text, default="", nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    task = relationship("Task")
+    environment = relationship("AppEnvironment")
+    application = relationship("Application")
+
+
 class TaskResult(Base):
     __tablename__ = "task_results"
 
@@ -294,6 +313,11 @@ class Issue(Base):
     task_id = Column(String(40), ForeignKey("inspection_tasks.id", ondelete="SET NULL"))
     resource_id = Column(String(40), ForeignKey("resources.id", ondelete="SET NULL"))
     item_id = Column(String(40), ForeignKey("inspection_items.id", ondelete="SET NULL"))
+    report_id = Column(String(40), ForeignKey("inspection_reports.id", ondelete="SET NULL"))
+    service_id = Column(String(40), ForeignKey("discovered_services.id", ondelete="SET NULL"))
+    source_type = Column(String(32), default="inspection_task", nullable=False)
+    source_id = Column(String(40), default="", nullable=False)
+    evidence_snapshot = Column(JSON, default=dict, nullable=False)
     summary = Column(Text, nullable=False)
     severity = Column(String(24), default="medium", nullable=False)
     status = Column(String(24), default="open", nullable=False)
@@ -306,6 +330,25 @@ class Issue(Base):
     resource = relationship("Resource")
     item = relationship("InspectionItem")
     task = relationship("Task")
+    report = relationship("InspectionReport")
+    service = relationship("DiscoveredService")
+
+
+class RepairTask(Base):
+    __tablename__ = "repair_tasks"
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("fix"))
+    issue_id = Column(String(40), ForeignKey("issues.id", ondelete="CASCADE"), nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    status = Column(String(24), default="pending", nullable=False)
+    assignee = Column(String(128), default="Unassigned", nullable=False)
+    suggested_steps = Column(JSON, default=list, nullable=False)
+    verification = Column(Text, default="", nullable=False)
+    created_by_ai = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    issue = relationship("Issue")
 
 
 class AnalysisRule(Base):
@@ -517,3 +560,37 @@ class AiChatMessage(Base):
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     session = relationship("AiChatSession")
+
+
+class AiWorkflow(Base):
+    __tablename__ = "ai_workflows"
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("wf"))
+    session_id = Column(String(40), ForeignKey("ai_chat_sessions.id", ondelete="CASCADE"), nullable=True, index=True)
+    intent = Column(String(64), nullable=False, index=True)
+    state = Column(String(64), nullable=False, default="START", index=True)
+    status = Column(String(32), nullable=False, default="running", index=True)
+    target = Column(JSON, default=dict, nullable=False)
+    context = Column(JSON, default=dict, nullable=False)
+    current_step = Column(String(64), default="", nullable=False)
+    next_actions = Column(JSON, default=list, nullable=False)
+    last_error = Column(Text, default="", nullable=False)
+    created_by = Column(String(40), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    session = relationship("AiChatSession")
+    events = relationship("AiWorkflowEvent", back_populates="workflow", cascade="all, delete-orphan")
+
+
+class AiWorkflowEvent(Base):
+    __tablename__ = "ai_workflow_events"
+
+    id = Column(String(40), primary_key=True, default=lambda: new_id("wfe"))
+    workflow_id = Column(String(40), ForeignKey("ai_workflows.id", ondelete="CASCADE"), nullable=False, index=True)
+    event = Column(String(64), nullable=False, index=True)
+    payload = Column(JSON, default=dict, nullable=False)
+    result = Column(JSON, default=dict, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    workflow = relationship("AiWorkflow", back_populates="events")

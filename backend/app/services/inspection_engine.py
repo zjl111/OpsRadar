@@ -10,6 +10,7 @@ from backend.app.models import AiAnalysisJob, AiAnalysisResult, AppEnvironment, 
 from backend.app.services.analysis import build_issue_insight
 from backend.app.services.diagnose_tools import diagnose_summary_for_issue
 from backend.app.services.executors import ExecutionContext, ExecutionResult, InspectionExecutor
+from backend.app.services.reports import persist_inspection_report
 
 
 def _resource_snapshot(resource: Resource) -> dict:
@@ -53,6 +54,8 @@ def _item_snapshot(item: InspectionItem, resource: Resource) -> dict:
 def _compatible(resource: Resource, item: InspectionItem) -> bool:
     if not item.enabled:
         return False
+    extra = dict(resource.extra_params or {})
+    service_kind = str(extra.get("service_kind") or "").lower()
     if item.category == "network":
         return True
     if resource.type == item.resource_type:
@@ -61,7 +64,9 @@ def _compatible(resource: Resource, item: InspectionItem) -> bool:
         return True
     if resource.type in {"container", "compose", "systemd"} and item.command_type == "shell" and item.category in {"container", "redis", "middleware"}:
         return True
-    if resource.type in {"container", "compose", "systemd"} and item.category in {"mysql", "postgresql", "pgsql", "sqlserver"}:
+    if item.category in {"mysql", "postgresql", "pgsql", "sqlserver"} and (
+        resource.type in {"mysql", "postgresql", "pgsql", "sqlserver"} or service_kind in {"mysql", "postgresql", "pgsql", "sqlserver"}
+    ):
         return True
     return False
 
@@ -75,9 +80,11 @@ def create_manual_task(
     user_id: str | None,
     environment_id: str | None = None,
     config: dict | None = None,
+    resource_item_ids: dict[str, list[str]] | None = None,
 ) -> Task:
     resources = db.query(Resource).filter(Resource.id.in_(resource_ids)).all()
     items = db.query(InspectionItem).filter(InspectionItem.id.in_(item_ids)).all()
+    items_by_id = {item.id: item for item in items}
     environment = db.get(AppEnvironment, environment_id) if environment_id else None
     environment_bindings = {
         binding.resource_id: binding
@@ -99,7 +106,11 @@ def create_manual_task(
     total = 0
     for resource in resources:
         binding = environment_bindings.get(resource.id)
-        for item in items:
+        candidate_item_ids = resource_item_ids.get(resource.id, item_ids) if resource_item_ids else item_ids
+        for item_id in candidate_item_ids:
+            item = items_by_id.get(item_id)
+            if not item:
+                continue
             if not _compatible(resource, item):
                 continue
             resource_snapshot = _resource_snapshot(resource)
@@ -235,6 +246,16 @@ async def run_task(task_id: str) -> None:
                     task_id=task.id,
                     resource_id=result.resource_id,
                     item_id=result.item_id,
+                    source_type="inspection_task",
+                    source_id=task.id,
+                    evidence_snapshot={
+                        "resource": result.resource_snapshot,
+                        "item": result.item_snapshot,
+                        "status": execution.status,
+                        "output": execution.output,
+                        "error_message": execution.error_message,
+                        "execution_time_ms": execution.execution_time_ms,
+                    },
                     summary=f"{result.resource_snapshot.get('name')} / {result.item_snapshot.get('name')} {execution.status}",
                     severity="high" if execution.status == "exception" else "medium",
                     status="open",
@@ -248,8 +269,22 @@ async def run_task(task_id: str) -> None:
         task.status = "cancelled" if task.cancel_requested else "finished"
         task.finished_at = datetime.now(timezone.utc)
         task.summary = {"total": len(results), **counters}
+        report = persist_inspection_report(db, task) if task.status == "finished" else None
+        if report:
+            db.query(Issue).filter(Issue.task_id == task.id, Issue.report_id.is_(None)).update(
+                {Issue.report_id: report.id},
+                synchronize_session=False,
+            )
         _append_log(db, task.id, "info", f"Task {task.status}. success={counters['success']} fail={counters['fail']} exception={counters['exception']}.")
-        db.add(AuditLog(actor="Worker", action="finish_task", target=task.name, detail=str(task.summary), result=task.status))
+        db.add(
+            AuditLog(
+                actor="Worker",
+                action="finish_task",
+                target=task.name,
+                detail=f"{task.summary}; report={report.id if report else '-'}",
+                result=task.status,
+            )
+        )
         db.commit()
     except Exception as exc:  # pragma: no cover - defensive safety path for the worker
         task = db.get(Task, task_id)
