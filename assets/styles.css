@@ -3443,13 +3443,121 @@ button {
   opacity: 1;
 }
 
+.ai-issue-choice-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--brand) 18%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--brand) 4%, var(--surface));
+}
+
+.ai-issue-choice-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ai-issue-choice-head strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.ai-issue-choice-head span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  opacity: 1;
+}
+
+.ai-issue-choice-list {
+  display: grid;
+  gap: 7px;
+}
+
+.ai-issue-choice {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 10px;
+  padding: 9px 10px;
+  color: var(--text);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-issue-choice:hover {
+  border-color: color-mix(in srgb, var(--brand) 42%, var(--line));
+  background: color-mix(in srgb, var(--brand) 7%, var(--surface));
+}
+
+.ai-issue-choice .icon {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+.ai-issue-choice .ai-issue-choice-main {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  min-width: 0;
+  opacity: 1;
+}
+
+.ai-issue-choice-main strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-issue-choice-main small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-issue-choice .ai-issue-severity {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  margin: 0;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+  font-size: 10px;
+  font-weight: 800;
+  opacity: 1;
+  text-transform: uppercase;
+}
+
+.ai-issue-severity.critical,
+.ai-issue-severity.high {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
 .ai-workflow-card {
   display: grid;
-  gap: 18px;
+  gap: 14px;
   margin-top: 16px;
-  padding: 22px 24px;
+  padding: 16px 24px 20px;
   width: min(820px, 100%);
-  min-height: 360px;
+  min-height: 420px;
+  max-height: 420px;
   border: 1px solid color-mix(in srgb, var(--brand) 20%, var(--line));
   border-radius: 18px;
   background: color-mix(in srgb, var(--surface) 94%, var(--brand) 3%);
@@ -3460,30 +3568,25 @@ button {
 .ai-workflow-head {
   display: flex;
   align-items: center;
-  gap: 14px;
+  min-height: 54px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--line);
 }
 
 .ai-workflow-head h3 {
   margin: 0;
-  font-size: 20px;
+  font-size: 19px;
   font-weight: 900;
   color: var(--text);
 }
 
 .ai-workflow-icon {
-  width: 42px;
-  height: 42px;
-  flex: 0 0 42px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  color: var(--brand);
-  background: color-mix(in srgb, var(--brand) 12%, transparent);
+  display: none;
 }
 
 .ai-workflow-icon .icon {
-  width: 24px;
-  height: 24px;
+  width: 25px;
+  height: 25px;
   stroke-width: 2.2;
 }
 
@@ -3491,8 +3594,7 @@ button {
   display: grid;
   grid-template-columns: 1fr 1fr 0.7fr 0.7fr 1fr;
   gap: 0;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
+  padding-top: 6px;
 }
 
 .ai-workflow-summary > div {

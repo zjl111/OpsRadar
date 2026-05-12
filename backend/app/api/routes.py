@@ -1888,8 +1888,58 @@ def _workflow_data_context(workflow: dict, fallback: dict) -> dict:
     return data
 
 
-def _direct_action_reply(message: str, data_context: dict, db: Session) -> tuple[str, str, dict] | None:
+def _direct_action_reply(message: str, data_context: dict, db: Session, history: list[AiChatMessage] | None = None) -> tuple[str, str, dict] | None:
     text = (message or "").lower()
+
+    def issue_selection_payload(issues: list[Issue], total: int | None = None, open_count: int | None = None) -> dict:
+        return {
+            "total": len(issues) if total is None else total,
+            "open": sum(1 for item in issues if item.status == "open") if open_count is None else open_count,
+            "items": [issue_payload(item, db, include_insight=False) for item in issues],
+        }
+
+    issue_id_match = re.search(r"\biss_[a-zA-Z0-9]+\b", message or "")
+    issue_index_match = re.search(r"(?:第\s*)?([一二三四五六七八九十1-9])\s*(?:个|条|项)?", message or "")
+    asks_select_issue = any(keyword in message for keyword in ["选", "分析", "修复建议", "根因"]) and issue_index_match
+    if asks_select_issue and history:
+        cn_number_map = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+        raw_index = issue_index_match.group(1)
+        selected_index = cn_number_map.get(raw_index, int(raw_index) if raw_index.isdigit() else 0) - 1
+        for item in history:
+            if item.role != "assistant":
+                continue
+            issues = (item.meta or {}).get("issues", {}).get("items") or []
+            if 0 <= selected_index < len(issues):
+                issue_id_match = re.search(r"\biss_[a-zA-Z0-9]+\b", issues[selected_index].get("id", ""))
+                break
+    if issue_id_match:
+        issue = db.get(Issue, issue_id_match.group(0))
+        if not issue:
+            return (
+                f"未找到问题 {issue_id_match.group(0)}。请从问题中心选择一个真实问题后再分析。\n\n来源：OpsRadar 问题列表",
+                "action:list_issues",
+                {"issues": issue_list_payload(db, 10), "data_context": data_context},
+            )
+        insight = db.query(IssueInsight).filter(IssueInsight.issue_id == issue.id).one_or_none()
+        if not insight:
+            insight = build_issue_insight(db, issue)
+            db.commit()
+        payload = issue_payload(issue, db)
+        reply = (
+            f"已定位到问题：{issue.summary}\n\n"
+            f"- 资产：{payload.get('resource_name') or '-'} {payload.get('resource_ip') or ''}\n"
+            f"- 应用环境：{payload.get('application_name') or '-'} / {payload.get('environment_name') or '-'}\n"
+            f"- 级别 / 状态：{issue.severity} / {issue.status}\n\n"
+            f"可能原因：{insight.probable_cause or '暂无规则命中'}\n\n"
+            f"影响范围：{insight.impact or '暂无影响分析'}\n\n"
+            f"修复建议：{insight.recommendation or '暂无修复建议'}\n\n"
+            f"验证方式：{insight.verification or '处理后重新执行相关巡检项'}\n\n"
+            "来源：OpsRadar 问题详情 / 规则知识库"
+        )
+        data = issue_list_payload(db, 10)
+        data["selected_issue_id"] = issue.id
+        return reply, "action:analyze_issue", {"issues": data, "data_context": {**data_context, "issues": 1}}
+
     ip_match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", message or "")
     asset_keywords = [
         "资产",
@@ -1954,11 +2004,12 @@ def _direct_action_reply(message: str, data_context: dict, db: Session) -> tuple
             )
         else:
             lines.append("")
-            lines.append("最近问题：")
+            lines.append("已找到该资产关联问题。请选择一个具体问题继续分析：")
             for issue in issues:
                 lines.append(f"- {issue.summary}（{issue.severity} / {issue.status}）")
         lines.extend(["", "来源：OpsRadar 资产列表 / 问题列表"])
         return "\n".join(lines), "action:list_assets", {
+            "issues": issue_selection_payload(issues),
             "data_context": {
                 "resources": 1,
                 "matched_assets": 1,
@@ -1973,14 +2024,11 @@ def _direct_action_reply(message: str, data_context: dict, db: Session) -> tuple
         data = issue_list_payload(db, 10)
         lines = [
             f"当前问题中心共有 {data['total']} 个问题，待处理 {data['open']} 个。",
-            "",
-            "来源：OpsRadar 问题列表",
         ]
         if data["items"]:
             lines.append("")
-            lines.append("最近问题：")
-            for item in data["items"][:5]:
-                lines.append(f"- {item['summary']}（{item['severity']} / {item['status']}）")
+            lines.append("请选择一个具体问题继续分析。只有选中真实问题后，我才会生成根因和修复建议。")
+        lines.extend(["", "来源：OpsRadar 问题列表"])
         return "\n".join(lines), "action:list_issues", {"issues": data, "data_context": data_context}
     if asks_issue_analysis:
         data = issue_list_payload(db, 10)
@@ -1992,11 +2040,9 @@ def _direct_action_reply(message: str, data_context: dict, db: Session) -> tuple
             )
             return reply, "action:list_issues", {"issues": data, "data_context": data_context}
         reply = (
-            f"当前问题中心共有 {data['total']} 个问题，待处理 {data['open']} 个。\n"
-            "请选择一个具体问题进入详情后执行 AI 根因分析，或让我基于最近问题生成修复建议。\n\n"
-            "最近问题：\n"
-            + "\n".join(f"- {item['summary']}（{item['severity']} / {item['status']}）" for item in data["items"][:5])
-            + "\n\n来源：OpsRadar 问题列表"
+            f"当前问题中心共有 {data['total']} 个问题，待处理 {data['open']} 个。\n\n"
+            "我需要你先选择一个具体问题。选中后我会基于该问题的资产、巡检证据和知识库生成根因分析与修复建议，不会脱离问题记录泛泛回答。\n\n"
+            "来源：OpsRadar 问题列表"
         )
         return reply, "action:list_issues", {"issues": data, "data_context": data_context}
 
@@ -2046,7 +2092,7 @@ def ai_chat(payload: AiChatPayload, db: Annotated[Session, Depends(get_db)], use
         db.add(AiChatMessage(session_id=session.id, role="assistant", content=out_of_scope_reply, meta={"status": "out_of_scope", "data_context": data_context, "tool_runs": [], "evidence": []}))
         db.commit()
         return {"session_id": session.id, "message": out_of_scope_reply, "status": "out_of_scope", "tool_runs": [], "evidence": [], "data_context": data_context}
-    direct = _direct_action_reply(payload.message, data_context, db)
+    direct = _direct_action_reply(payload.message, data_context, db, history)
     if direct:
         assistant_message, status, meta = direct
         db.add(AiChatMessage(session_id=session.id, role="assistant", content=assistant_message, meta={"status": status, **meta, "tool_runs": [], "evidence": []}))

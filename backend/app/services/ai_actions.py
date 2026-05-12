@@ -567,7 +567,6 @@ def _advance_workflow(db: Session, workflow: AiWorkflow) -> None:
                     requires_confirmation=True,
                     style="primary",
                 ),
-                _ui_action("跳过测试", "run_workflow_action", action_name="skip_connection_test", requires_confirmation=True),
             ],
         )
         return
@@ -642,7 +641,7 @@ def _advance_workflow(db: Session, workflow: AiWorkflow) -> None:
             "创建巡检任务",
             [
                 _ui_action(
-                    "打开巡检任务",
+                    "创建巡检任务",
                     "open_task_modal",
                     event="task_created",
                     params={
@@ -914,7 +913,62 @@ async def execute_workflow_action(
         for resource_id in ids:
             item = await _execute_registered_action(db, user, "test_asset_connection", {"resource_id": resource_id})
             tested.append(item)
+        failed = [item for item in tested if item.get("status") != "success"]
+        if failed:
+            context["connection_tested"] = False
+            context["connection_failed_resource_ids"] = [
+                (item.get("resource") or {}).get("id") or item.get("resource_id")
+                for item in failed
+                if (item.get("resource") or {}).get("id") or item.get("resource_id")
+            ]
+            workflow.context = context
+            names = [
+                (item.get("resource") or {}).get("name")
+                or (item.get("resource") or {}).get("ip")
+                or item.get("summary")
+                or "unknown"
+                for item in failed
+            ]
+            result = _action_result(
+                "failed",
+                f"资产连接失败：{', '.join(names)}。请修改资产连接信息后重新测试，连接成功前不能进入下一步。",
+                {"items": tested, "failed": failed},
+                next_state="CONNECTION_FAILED",
+            )
+            _set_workflow_state(
+                workflow,
+                "WAITING_CONNECTION_TEST",
+                "waiting_user",
+                "测试资产连通性",
+                [
+                    _ui_action(
+                        "重新测试连通性",
+                        "run_workflow_action",
+                        action_name="test_asset_connection",
+                        params={"resource_ids": ids},
+                        requires_confirmation=True,
+                        style="primary",
+                    ),
+                    _ui_action("修改资产", "select_assets", event="asset_selected", params={"environment_id": context.get("environment_id")}),
+                    _ui_action("添加资产", "open_resource_modal", event="asset_created", params={"environment_id": context.get("environment_id")}),
+                ],
+                result["summary"],
+            )
+            _record_workflow_event(db, workflow, f"action:{action_name}", params, result)
+            db.add(
+                AuditLog(
+                    actor=user.display_name,
+                    action=f"ai_action:{action_name}",
+                    target=",".join(ids),
+                    detail=result["summary"][:1000],
+                    result="failed",
+                )
+            )
+            db.commit()
+            db.refresh(workflow)
+            return {"workflow": workflow_payload(db, workflow), "action_result": result}
         context["connection_tested"] = True
+        context.pop("connection_failed_resource_ids", None)
         workflow.context = context
         result = _action_result("success", f"已测试 {len(tested)} 个资产", {"items": tested}, next_state="CONNECTION_TESTED")
     elif action_name == "discover_services":
@@ -1055,6 +1109,10 @@ def issue_list_payload(db: Session, limit: int = 20) -> dict:
         .limit(max(1, min(limit, 100)))
         .all()
     )
+    resource_ids = [item.resource_id for item in items if item.resource_id]
+    resources = {item.id: item for item in db.query(Resource).filter(Resource.id.in_(resource_ids)).all()} if resource_ids else {}
+    task_ids = [item.task_id for item in items if item.task_id]
+    tasks = {item.id: item for item in db.query(Task).filter(Task.id.in_(task_ids)).all()} if task_ids else {}
     return {
         "total": db.query(Issue).count(),
         "open": db.query(Issue).filter(Issue.status == "open").count(),
@@ -1065,7 +1123,11 @@ def issue_list_payload(db: Session, limit: int = 20) -> dict:
                 "severity": issue.severity,
                 "status": issue.status,
                 "resource_id": issue.resource_id,
+                "resource_name": resources.get(issue.resource_id).name if issue.resource_id in resources else "",
+                "resource_ip": resources.get(issue.resource_id).ip if issue.resource_id in resources else "",
+                "resource_type": resources.get(issue.resource_id).type if issue.resource_id in resources else "",
                 "task_id": issue.task_id,
+                "task_name": tasks.get(issue.task_id).name if issue.task_id in tasks else "",
                 "created_at": issue.created_at.isoformat() if issue.created_at else None,
             }
             for issue in items

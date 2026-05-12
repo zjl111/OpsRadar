@@ -112,6 +112,7 @@ def render_report_html(db: Session, task_ids: list[str]) -> str:
 
 def persist_inspection_report(db: Session, task: Task) -> InspectionReport:
     existing = db.query(InspectionReport).filter(InspectionReport.task_id == task.id).order_by(InspectionReport.created_at.desc()).first()
+    settings.report_dir.mkdir(parents=True, exist_ok=True)
     html_path = settings.report_dir / f"{task.id}.html"
     html_path.write_text(render_report_html(db, [task.id]), encoding="utf-8")
     summary = dict(task.summary or {})
@@ -223,6 +224,7 @@ def build_pdf_report(html: str, output_path: Path) -> Path:
 def export_report(db: Session, task_ids: list[str], fmt: str) -> tuple[Path, str, str]:
     safe_id = "merged" if len(task_ids) > 1 else task_ids[0]
     fmt = fmt.lower()
+    settings.report_dir.mkdir(parents=True, exist_ok=True)
     if fmt == "html":
         path = settings.report_dir / f"{safe_id}.html"
         path.write_text(render_report_html(db, task_ids), encoding="utf-8")

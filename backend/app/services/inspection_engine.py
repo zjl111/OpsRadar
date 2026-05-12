@@ -269,12 +269,17 @@ async def run_task(task_id: str) -> None:
         task.status = "cancelled" if task.cancel_requested else "finished"
         task.finished_at = datetime.now(timezone.utc)
         task.summary = {"total": len(results), **counters}
-        report = persist_inspection_report(db, task) if task.status == "finished" else None
-        if report:
-            db.query(Issue).filter(Issue.task_id == task.id, Issue.report_id.is_(None)).update(
-                {Issue.report_id: report.id},
-                synchronize_session=False,
-            )
+        report = None
+        if task.status == "finished":
+            try:
+                report = persist_inspection_report(db, task)
+                db.query(Issue).filter(Issue.task_id == task.id, Issue.report_id.is_(None)).update(
+                    {Issue.report_id: report.id},
+                    synchronize_session=False,
+                )
+            except Exception as report_exc:
+                _append_log(db, task.id, "error", f"Report generation failed: {report_exc}")
+                db.add(AuditLog(actor="Worker", action="generate_report_failed", target=task.name, detail=str(report_exc), result="failed"))
         _append_log(db, task.id, "info", f"Task {task.status}. success={counters['success']} fail={counters['fail']} exception={counters['exception']}.")
         db.add(
             AuditLog(

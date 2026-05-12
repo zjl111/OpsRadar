@@ -840,6 +840,7 @@ const state = {
   resourceCreateDefaults: null,
   applicationCreateDefaults: null,
   workflowCallback: null,
+  workflowBatchAssets: [],
   taskCreateDraft: null,
   issueDetailId: null,
   issueDetailTab: "overview",
@@ -1718,9 +1719,46 @@ function aiChatMessageHtml(message, scope = "page") {
     <div class="ai-chat-row ${isUser ? "user" : "assistant"}">
       <div class="ai-chat-bubble">
         <div class="ai-message-content">${isUser ? escapeHtml(message.content) : renderAssistantMarkdown(message.content, scope)}</div>
+        ${!isUser ? aiIssueChoicesHtml(message.meta || {}, scope) : ""}
         ${!isUser ? aiActionSourceHtml(message.meta || {}) : ""}
         ${!isUser && workflow && workflow.status !== "not_required" ? aiWorkflowHtml(workflow) : ""}
         <span>${escapeHtml(message.time || currentTimeLabel())}</span>
+      </div>
+    </div>
+  `;
+}
+
+function aiAnalyzeIssuePrompt(issueId) {
+  return state.lang === "zh"
+    ? `分析问题 ${issueId} 的可能原因，并生成修复建议`
+    : `Analyze issue ${issueId} and generate repair suggestions`;
+}
+
+function aiIssueChoicesHtml(meta = {}, scope = "page") {
+  const issues = meta.issues?.items || [];
+  if (!issues.length) return "";
+  const title = state.lang === "zh" ? "选择问题继续分析" : "Select an issue to analyze";
+  return `
+    <div class="ai-issue-choice-card">
+      <div class="ai-issue-choice-head">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(state.lang === "zh" ? `共 ${meta.issues.total || issues.length} 个问题` : `${meta.issues.total || issues.length} issues`)}</span>
+      </div>
+      <div class="ai-issue-choice-list">
+        ${issues.slice(0, 6).map((issue) => {
+          const asset = [issue.resource_name, issue.resource_ip].filter(Boolean).join(" / ") || "-";
+          const env = [issue.application_name, issue.environment_name].filter(Boolean).join(" / ") || "-";
+          return `
+            <button type="button" class="ai-issue-choice" data-action="ai-analyze-issue" data-id="${escapeHtml(issue.id)}" data-chat-scope="${escapeHtml(scope)}">
+              <span class="ai-issue-severity ${escapeHtml(issue.severity || "medium")}">${escapeHtml(issue.severity || "-")}</span>
+              <span class="ai-issue-choice-main">
+                <strong>${escapeHtml(issue.summary || issue.id)}</strong>
+                <small>${escapeHtml(asset)} · ${escapeHtml(env)} · ${escapeHtml(issue.status || "-")}</small>
+              </span>
+              ${icon("chevron-right")}
+            </button>
+          `;
+        }).join("")}
       </div>
     </div>
   `;
@@ -1731,6 +1769,7 @@ function aiActionSourceHtml(meta = {}) {
   const sourceMap = {
     "action:list_issues": state.lang === "zh" ? "OpsRadar 问题列表" : "OpsRadar Issues",
     "action:list_assets": state.lang === "zh" ? "OpsRadar 资产列表" : "OpsRadar Assets",
+    "action:analyze_issue": state.lang === "zh" ? "OpsRadar 问题详情 / 规则知识库" : "OpsRadar Issue Detail / Knowledge Base",
     "action:get_platform_summary": state.lang === "zh" ? "OpsRadar 平台统计" : "OpsRadar Summary",
     empty_context: state.lang === "zh" ? "OpsRadar 数据上下文" : "OpsRadar Context",
     workflow_ready: state.lang === "zh" ? "OpsRadar 工作流" : "OpsRadar Workflow",
@@ -1777,8 +1816,7 @@ function aiWorkflowHtml(workflow) {
   return `
     <div class="ai-workflow-card">
       <div class="ai-workflow-head">
-        <span class="ai-workflow-icon">${icon("target")}</span>
-        <h3>${state.lang === "zh" ? "巡检目标" : "Inspection Target"}</h3>
+        <h3>${state.lang === "zh" ? "巡检任务" : "Inspection Task"}</h3>
       </div>
       <div class="ai-workflow-summary">
         <div><span>${state.lang === "zh" ? "目标应用" : "Application"}</span><strong>${escapeHtml(target.application_name || context.candidate_application_name || "-")}</strong></div>
@@ -5179,7 +5217,9 @@ function renderAlertModal(modal) {
           <p>${escapeHtml(modal.message || "")}</p>
         </div>
         <div class="modal-actions alert-actions">
-          <button class="btn primary" type="button" data-action="close-modal">${t("action.ok")}</button>
+          ${(modal.actions || []).map((action) => `
+            <button class="btn ${action.tone === "primary" || action.tone === "success" ? "primary" : ""}" type="button" data-action="${escapeHtml(action.action)}">${escapeHtml(action.label)}</button>
+          `).join("") || `<button class="btn primary" type="button" data-action="close-modal">${t("action.ok")}</button>`}
         </div>
       </section>
     </div>
@@ -5705,6 +5745,7 @@ function closeModal() {
   if (state.modal?.type === "resource") state.resourceCreateDefaults = null;
   if (state.modal?.type === "application") state.applicationCreateDefaults = null;
   state.workflowCallback = null;
+  state.workflowBatchAssets = [];
   state.modal = null;
   render();
 }
@@ -6499,11 +6540,29 @@ document.addEventListener("submit", async (event) => {
             env_type: form.elements.env_type?.value || callback.params?.env_type || "prod",
           });
         } else if (type === "resource") {
-          await sendWorkflowEvent(callback.event || "asset_created", {
-            resource_id: result.id,
-            id: result.id,
+          state.workflowBatchAssets = state.workflowBatchAssets || [];
+          state.workflowBatchAssets.push(result.id);
+          state.workflowCallback = callback;
+          state.resourceCreateDefaults = {
+            ...(state.resourceCreateDefaults || {}),
             environment_id: callback.params?.environment_id || "",
-          });
+          };
+          state.modal = {
+            type: "alert",
+            icon: "checklist",
+            tone: "success",
+            title: state.lang === "zh" ? "资产已添加" : "Asset added",
+            message: state.lang === "zh"
+              ? `已添加 ${state.workflowBatchAssets.length} 个资产。一个应用环境通常需要多个资产，你可以继续添加，或完成后继续 AI 巡检流程。`
+              : `${state.workflowBatchAssets.length} asset(s) added. Continue adding assets or finish to continue the AI workflow.`,
+            actions: [
+              { label: state.lang === "zh" ? "继续添加资产" : "Add another asset", action: "workflow-add-more-resource", tone: "primary" },
+              { label: state.lang === "zh" ? "完成添加，继续流程" : "Finish and continue", action: "workflow-finish-resource-add", tone: "success" },
+            ],
+          };
+          await loadBootstrap();
+          render();
+          return;
         } else if (type === "environment-rules") {
           await sendWorkflowEvent(callback.event || "rules_confirmed", {
             environment_id: id,
@@ -6833,6 +6892,8 @@ document.addEventListener("click", async (event) => {
       await sendAiChat(chatRoot?.querySelector("textarea")?.value, target.dataset.chatScope || "page");
     } else if (action === "ai-quick-prompt") {
       await sendAiChat(target.dataset.prompt, target.dataset.chatScope || "page");
+    } else if (action === "ai-analyze-issue") {
+      await sendAiChat(aiAnalyzeIssuePrompt(target.dataset.id), target.dataset.chatScope || "page");
     } else if (action === "workflow-next-action") {
       const workflowId = target.dataset.workflowId || "";
       const uiAction = target.dataset.uiAction || "";
@@ -7125,6 +7186,30 @@ document.addEventListener("click", async (event) => {
       openModal("service-discovery", id);
     } else if (action === "add-resource") {
       openModal("resource", "new");
+    } else if (action === "workflow-add-more-resource") {
+      const callback = state.workflowCallback;
+      state.modal = null;
+      state.resourceCreateDefaults = {
+        ...(state.resourceCreateDefaults || {}),
+        environment_id: callback?.params?.environment_id || "",
+      };
+      openModal("resource", "new");
+    } else if (action === "workflow-finish-resource-add") {
+      const ids = [...new Set(state.workflowBatchAssets || [])];
+      const callback = state.workflowCallback;
+      if (!callback?.workflow_id || !ids.length) {
+        state.modal = null;
+        state.workflowBatchAssets = [];
+        render();
+        return;
+      }
+      await sendWorkflowEvent(callback.event || "asset_created", {
+        resource_ids: ids,
+        environment_id: callback.params?.environment_id || "",
+      });
+      state.workflowBatchAssets = [];
+      state.modal = null;
+      await refreshData(t("toast.saved"));
     } else if (action === "edit-resource") {
       openModal("resource", target.dataset.id);
     } else if (action === "delete-discovered-service") {

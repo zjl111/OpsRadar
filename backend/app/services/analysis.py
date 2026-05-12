@@ -36,6 +36,10 @@ def _rule_score(rule: AnalysisRule, issue: Issue, result: TaskResult | None) -> 
             str(item.get("name", "")),
         ]
     )
+    if rule.error_keyword and not _contains(output, rule.error_keyword):
+        return 0
+    if rule.item_keyword and not _contains(str(item.get("name", "")), rule.item_keyword):
+        return 0
     score = 0
     if rule.layer and rule.layer == resource.get("environment_layer"):
         score += 3
