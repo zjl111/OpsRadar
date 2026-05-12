@@ -110,7 +110,7 @@ from backend.app.services.diagnose_tools import (
 )
 from backend.app.services.executors import ExecutionContext, InspectionExecutor
 from backend.app.services.rbac import ALL_PERMISSIONS, effective_permissions, has_permission
-from backend.app.services.reports import export_report, render_report_html
+from backend.app.services.reports import _extract_current_state, _issue_recommendation, _issue_steps, export_report, render_report_html
 from backend.app.services.security import create_access_token, decode_access_token, hash_password, verify_password
 from backend.app.services.serializers import model_to_dict
 from backend.app.services.service_discovery import discover_services_for_resource, discovered_service_payload
@@ -469,9 +469,37 @@ def issue_payload(issue: Issue, db: Session | None = None, include_insight: bool
     data["resource_ip"] = resource.ip if resource else snapshot.get("ip", "")
     data["resource_type"] = resource.type if resource else snapshot.get("type", "")
     data["report_name"] = issue.report.task.name if issue.report and issue.report.task else ""
+    if task_result:
+        item_snapshot = dict(task_result.item_snapshot or {})
+        result_payload = {
+            "status": task_result.status,
+            "output": task_result.output,
+            "error_message": task_result.error_message,
+            "execution_time_ms": task_result.execution_time_ms,
+            "resource": snapshot,
+            "item": item_snapshot,
+        }
+        data["inspection_evidence"] = {
+            **result_payload,
+            "current_state": _extract_current_state(task_result.output, task_result.error_message, item_snapshot),
+            "judgement": f"判定规则：{item_snapshot.get('expected') or '未配置'}。",
+            "command": item_snapshot.get("command") or "",
+            "expected": item_snapshot.get("expected") or "",
+        }
+    else:
+        data["inspection_evidence"] = None
     if include_insight and db is not None:
         insight = db.query(IssueInsight).filter(IssueInsight.issue_id == issue.id).one_or_none()
         data["insight"] = model_to_dict(insight) if insight else None
+        evidence_issue = {
+            "resource_snapshot": snapshot,
+            "item_snapshot": dict(task_result.item_snapshot or {}) if task_result else {},
+            "output": task_result.output if task_result else "",
+            "error_message": task_result.error_message if task_result else "",
+            "insight": data["insight"],
+        }
+        data["repair_recommendation"] = _issue_recommendation(evidence_issue)
+        data["repair_steps"] = _issue_steps(evidence_issue)
     return data
 
 
@@ -3133,11 +3161,9 @@ def get_issue_insight(issue_id: str, db: Annotated[Session, Depends(get_db)], us
     issue = db.get(Issue, issue_id)
     if not issue:
         raise HTTPException(status_code=404, detail="Issue not found")
-    insight = db.query(IssueInsight).filter(IssueInsight.issue_id == issue.id).one_or_none()
-    if not insight:
-        insight = build_issue_insight(db, issue)
-        db.commit()
-        db.refresh(insight)
+    insight = build_issue_insight(db, issue)
+    db.commit()
+    db.refresh(insight)
     return {"issue": issue_payload(issue, db), "insight": model_to_dict(insight)}
 
 

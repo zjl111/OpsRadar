@@ -3893,18 +3893,41 @@ function renderIssueDetail(issue) {
 }
 
 function renderIssueOverview(issue) {
+  const evidence = issue.inspection_evidence || {};
+  const item = evidence.item || {};
+  const resource = evidence.resource || {};
+  const output = [evidence.output, evidence.error_message].filter(Boolean).join("\n\n");
   return `
     <div class="problem-detail-grid">
       <section class="problem-detail-card wide">
-        <h3>${state.lang === "zh" ? "问题描述" : "Description"}</h3>
-        <p>${escapeHtml(issue.description || issue.summary || "-")}</p>
+        <h3>${state.lang === "zh" ? "告警判断依据" : "Alert Evidence"}</h3>
+        <div class="issue-evidence-summary">
+          <div>
+            <span>${state.lang === "zh" ? "当前情况" : "Current"}</span>
+            <strong>${escapeHtml(evidence.current_state || issue.description || issue.summary || "-")}</strong>
+          </div>
+          <div>
+            <span>${state.lang === "zh" ? "告警阈值" : "Threshold"}</span>
+            <strong>${escapeHtml(evidence.expected || "-")}</strong>
+          </div>
+          <div>
+            <span>${state.lang === "zh" ? "执行耗时" : "Cost"}</span>
+            <strong>${escapeHtml(evidence.execution_time_ms != null ? `${evidence.execution_time_ms}ms` : "-")}</strong>
+          </div>
+        </div>
+        <dl class="detail-dl issue-command-dl">
+          <dt>${state.lang === "zh" ? "巡检项" : "Check"}</dt><dd>${escapeHtml(item.name || issue.item_id || "-")}</dd>
+          <dt>${state.lang === "zh" ? "执行命令" : "Command"}</dt><dd class="mono">${escapeHtml(evidence.command || item.command || "-")}</dd>
+          <dt>${state.lang === "zh" ? "判定规则" : "Rule"}</dt><dd>${escapeHtml(evidence.judgement || "-")}</dd>
+        </dl>
+        ${output ? `<pre class="issue-output-box">${escapeHtml(output)}</pre>` : ""}
       </section>
       <section class="problem-detail-card">
         <h3>${state.lang === "zh" ? "基本信息" : "Basic Info"}</h3>
         <dl class="detail-dl">
-          <dt>${state.lang === "zh" ? "资源名称" : "Resource"}</dt><dd>${escapeHtml(issue.resource_name || "-")}</dd>
-          <dt>IP</dt><dd>${escapeHtml(issue.resource_ip || "-")}</dd>
-          <dt>${state.lang === "zh" ? "资源类型" : "Type"}</dt><dd>${escapeHtml(resourceTypeLabel(issue.resource_type || "-"))}</dd>
+          <dt>${state.lang === "zh" ? "资源名称" : "Resource"}</dt><dd>${escapeHtml(resource.name || issue.resource_name || "-")}</dd>
+          <dt>IP</dt><dd>${escapeHtml(resource.ip || issue.resource_ip || "-")}</dd>
+          <dt>${state.lang === "zh" ? "资源类型" : "Type"}</dt><dd>${escapeHtml(resourceTypeLabel(resource.type || issue.resource_type || "-"))}</dd>
           <dt>${state.lang === "zh" ? "当前状态" : "Status"}</dt><dd>${escapeHtml(issueStatusLabel(issue))}</dd>
         </dl>
       </section>
@@ -3926,18 +3949,17 @@ function renderIssueOverview(issue) {
 }
 
 function renderIssueMiniTrend(issue) {
-  const points = [62, 72, 76, 81, 81, 84, 88];
-  const labels = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date();
-    date.setDate(date.getDate() - (6 - index));
-    return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-  });
-  const polyline = points.map((value, index) => `${index * 52},${110 - value}`).join(" ");
+  const points = issue.metric_points || issue.trend_points || [];
+  if (!points.length) {
+    return `<div class="empty compact-empty">${state.lang === "zh" ? "暂无真实历史趋势数据。接入 Prometheus / VictoriaMetrics 后可展示该指标最近 7 天变化。" : "No real trend data. Connect Prometheus / VictoriaMetrics to show 7-day metric history."}</div>`;
+  }
+  const labels = points.map((point) => String(point.label || "").slice(0, 5));
+  const polyline = points.map((point, index) => `${index * 52},${110 - Number(point.value || 0)}`).join(" ");
   return `
     <div class="issue-mini-chart">
       <svg viewBox="0 0 320 130" role="img" aria-label="trend">
         <polyline points="${polyline}" fill="none" stroke="#ef4444" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
-        ${points.map((value, index) => `<circle cx="${index * 52}" cy="${110 - value}" r="4" fill="#ef4444"></circle>`).join("")}
+        ${points.map((point, index) => `<circle cx="${index * 52}" cy="${110 - Number(point.value || 0)}" r="4" fill="#ef4444"></circle>`).join("")}
       </svg>
       <div class="issue-mini-axis">${labels.map((label) => `<span>${escapeHtml(label)}</span>`).join("")}</div>
     </div>
@@ -3945,8 +3967,14 @@ function renderIssueMiniTrend(issue) {
 }
 
 function renderIssueAnalysis(issue, insight) {
+  const evidence = issue.inspection_evidence || {};
   return `
     <div class="problem-detail-grid single">
+      <section class="problem-detail-card">
+        <h3>${state.lang === "zh" ? "为什么触发告警" : "Why Alerted"}</h3>
+        <p>${escapeHtml(evidence.current_state || "未获取到巡检输出。")}</p>
+        <p>${escapeHtml(evidence.judgement || "")}</p>
+      </section>
       <section class="problem-detail-card">
         <h3>${state.lang === "zh" ? "可能原因" : "Probable Cause"}</h3>
         <p>${escapeHtml(insight.probable_cause || (state.lang === "zh" ? "暂无 AI 根因分析，请点击重新诊断生成。" : "No AI root cause yet. Run diagnosis to generate one."))}</p>
@@ -3991,11 +4019,11 @@ function renderIssueEvidence(issue, insight) {
 }
 
 function renderIssueSuggestion(issue, insight) {
-  const steps = insight.steps || insight.action_steps || [];
+  const steps = issue.repair_steps || insight.steps || insight.action_steps || [];
   return `
     <section class="problem-detail-card">
       <h3>${state.lang === "zh" ? "修复建议" : "Remediation"}</h3>
-      <p>${escapeHtml(insight.recommendation || "-")}</p>
+      <p>${escapeHtml(issue.repair_recommendation || insight.recommendation || "-")}</p>
       ${steps.length ? `<ol class="step-list">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol>` : ""}
       <h3>${state.lang === "zh" ? "修复后验证" : "Verification"}</h3>
       <p>${escapeHtml(insight.verification || "-")}</p>

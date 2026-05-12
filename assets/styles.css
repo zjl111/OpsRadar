@@ -5934,6 +5934,55 @@ button {
   margin: 0 0 10px;
 }
 
+.issue-evidence-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(140px, 0.7fr) minmax(120px, 0.5fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.issue-evidence-summary div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--brand) 16%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--brand) 4%, var(--surface));
+}
+
+.issue-evidence-summary span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.issue-evidence-summary strong {
+  display: block;
+  color: var(--text);
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.issue-command-dl {
+  grid-template-columns: 90px minmax(0, 1fr);
+  margin-bottom: 12px;
+}
+
+.issue-output-box {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 .repair-task-list {
   display: grid;
   gap: 8px;

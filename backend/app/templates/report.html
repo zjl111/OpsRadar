@@ -38,6 +38,13 @@
     .env-health-card strong { display:block; font-size:24px; color:#263746; margin-bottom:4px; }
     .insight-box { text-align:left; line-height:18px; }
     .insight-box strong { color:#263746; }
+    .ai-summary { border:1px solid #cfe3dd; background:#f4fbf8; border-radius:4px; padding:14px 16px; margin:0 0 18px; line-height:22px; }
+    .ai-summary p { margin:0 0 8px; }
+    .ai-summary ul { margin:8px 0 0 18px; padding:0; }
+    .ai-summary li { margin:6px 0; }
+    .issue-current { margin:0 0 8px; padding:8px; background:#fafafa; border:1px solid #eee; border-radius:3px; }
+    .issue-steps { margin:6px 0 0 16px; padding:0; }
+    .issue-steps li { margin:4px 0; }
     .mono { font-family:Menlo,Monaco,Consolas,monospace; font-size:12px; }
     .task-break { page-break-before:always; border-top:3px solid #263746; padding-top:18px; margin-top:22px; }
     @media print { body { background:#fff; } #report { width:100%; box-shadow:none; margin:0; } }
@@ -79,6 +86,19 @@
         <tr><td>Results:</td><td>{{ summary.total }} checks / {{ summary.success }} success / {{ summary.fail }} failed / {{ summary.exception }} exception</td></tr>
       </tbody></table>
     </div>
+    <div class="details-header">AI 总结与分析</div>
+    <div class="ai-summary">
+      {% for paragraph in analysis.paragraphs %}
+      <p>{{ paragraph }}</p>
+      {% endfor %}
+      {% if analysis.key_findings %}
+      <ul>
+        {% for finding in analysis.key_findings %}
+        <li><strong>{{ finding.resource }} / {{ finding.item }}：</strong>{{ finding.current }} 建议：{{ finding.recommendation }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
     <div class="details-header">Cluster Overview</div>
     <div class="table-wrapper details">
       {% for app in clusters %}
@@ -94,7 +114,7 @@
       <div class="details-header">Task Summary: {{ task.name }}</div>
       <div class="table-wrapper details">
         <table><tbody>
-          <tr><td style="width:20%;">Task ID:</td><td class="mono">{{ task.id }}</td></tr>
+          <tr><td style="width:20%;">Task Name:</td><td>{{ task.name }}</td></tr>
           <tr><td>Status:</td><td>{{ task.status }}</td></tr>
           <tr><td>Application Environment:</td><td>{{ task.application_name or "-" }} / {{ task.environment_name or "-" }}</td></tr>
           <tr><td>Started:</td><td>{{ task.started_at }}</td></tr>
@@ -136,23 +156,42 @@
     <div class="table-wrapper details">
       <table>
         <tbody>
-          <tr class="plugin-row-header"><th>Severity</th><th>Task</th><th>Node</th><th>Category</th><th>Message</th><th>Analysis & Recommendation</th></tr>
+          <tr class="plugin-row-header"><th>Severity</th><th>Task</th><th>Node</th><th>Category</th><th>Current State & Rule</th><th>Analysis & Recommendation</th></tr>
           {% if issues %}
           {% for issue in issues %}
           <tr class="plugin-row">
             <td><span class="badge" style="background:{{ '#d43f3a' if issue.status == 'exception' else '#ee9336' }};">{{ issue.severity }}</span></td>
-            <td>{{ issue.task_id }}</td>
+            <td>{{ issue.task_name }}</td>
             <td>{{ issue.resource_snapshot.name }}<br><span class="mono">{{ issue.resource_snapshot.ip }}:{{ issue.resource_snapshot.port }}</span></td>
             <td>{{ issue.item_snapshot.category }}</td>
-            <td>{{ issue.output or issue.error_message }}</td>
+            <td class="insight-box">
+              <div class="issue-current"><strong>Current:</strong> {{ issue.current_state }}</div>
+              <div><strong>Rule:</strong> {{ issue.judgement }}</div>
+            </td>
             <td class="insight-box">
               {% if issue.insight %}
               <strong>Cause:</strong> {{ issue.insight.probable_cause }}<br>
               <strong>Impact:</strong> {{ issue.insight.impact }}<br>
-              <strong>Action:</strong> {{ issue.insight.recommendation }}<br>
+              <strong>Action:</strong> {{ issue.recommendation }}<br>
               <strong>Verify:</strong> {{ issue.insight.verification }}
+              {% if issue.steps %}
+              <br><strong>Steps:</strong>
+              <ol class="issue-steps">
+                {% for step in issue.steps %}
+                <li>{{ step }}</li>
+                {% endfor %}
+              </ol>
+              {% endif %}
               {% else %}
-              Review resource status, validate threshold, and track remediation in OpsRadar Issues.
+              <strong>Action:</strong> {{ issue.recommendation }}<br>
+              {% if issue.steps %}
+              <strong>Steps:</strong>
+              <ol class="issue-steps">
+                {% for step in issue.steps %}
+                <li>{{ step }}</li>
+                {% endfor %}
+              </ol>
+              {% endif %}
               {% endif %}
             </td>
           </tr>

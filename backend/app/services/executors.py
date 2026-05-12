@@ -37,6 +37,8 @@ class JudgementEngine:
         rule = (expected or "").strip()
         if not rule:
             return "success", ""
+        if rule.lower() in {"review", "manual", "info", "informational"}:
+            return "success", ""
         if rule == "empty":
             return ("success", "") if not clean_stdout.strip() else ("fail", "Expected empty output.")
         if rule.startswith("regex:"):
@@ -46,10 +48,11 @@ class JudgementEngine:
         if threshold:
             op = threshold.group(2)
             expected_value = float(threshold.group(3))
-            numbers = [float(value) for value in re.findall(r"-?\d+(?:\.\d+)?", clean_stdout)]
+            percent_values = [float(value) for value in re.findall(r"(\d+(?:\.\d+)?)%", clean_stdout)]
+            numbers = percent_values or [float(value) for value in re.findall(r"-?\d+(?:\.\d+)?", clean_stdout)]
             if not numbers:
                 return "fail", f"No numeric value found for threshold rule {rule}."
-            value = numbers[0]
+            value = max(numbers) if percent_values else numbers[0]
             passed = {
                 "<": value < expected_value,
                 "<=": value <= expected_value,

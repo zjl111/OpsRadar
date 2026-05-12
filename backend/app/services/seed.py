@@ -297,7 +297,7 @@ def seed_builtin_data(db: Session) -> None:
     db.commit()
 
     builtin_items = [
-        ("itm_os_cpu", "CPU 使用率", "os", "host", "shell", "top -bn1 | awk -F'id,' '/Cpu/ {split($1,a,\",\"); print 100-a[length(a)]}'", "<80", "基础巡检：检查 CPU 使用率是否超过阈值。"),
+        ("itm_os_cpu", "CPU 使用率", "os", "host", "shell", "read cpu u1 n1 s1 i1 rest < /proc/stat; t1=$((u1+n1+s1+i1)); a1=$((u1+n1+s1)); sleep 1; read cpu u2 n2 s2 i2 rest < /proc/stat; t2=$((u2+n2+s2+i2)); a2=$((u2+n2+s2)); awk -v a1=$a1 -v a2=$a2 -v t1=$t1 -v t2=$t2 'BEGIN { if (t2==t1) print 0; else printf \"%.2f\", ((a2-a1)/(t2-t1))*100 }'", "<80", "基础巡检：检查 CPU 使用率是否超过阈值。"),
         ("itm_os_memory", "内存占用", "os", "host", "shell", "free -m | awk '/Mem:/ {printf \"%.2f\", ($3/$2)*100}'", "<80", "基础巡检：检查内存占用比例。"),
         ("itm_os_disk_inode", "磁盘空间 / inode", "os", "host", "shell", "df -PTh; df -Pi", "<80", "基础巡检：检查文件系统空间与 inode 使用率。"),
         ("itm_os_load", "系统负载", "os", "host", "shell", "uptime", "load<cpu_count", "基础巡检：检查 1/5/15 分钟系统负载。"),
