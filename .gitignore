@@ -13,3 +13,10 @@ reports/*.docx
 reports/*.pdf
 reports/*.tmp
 *.log
+node_modules/
+dist/
+.opsradar-logs/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+backend/opsradar-api/data/
