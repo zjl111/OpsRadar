@@ -612,8 +612,9 @@ func (s *Server) handleWorkerNext(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	targets, _ := queryMany(r.Context(), s.db, `select id,resource_id,resource_snapshot from target_runs where task_id=$1 order by created_at`, []string{"id", "resource_id", "resource_snapshot"}, taskID)
 	_ = s.writeTaskLog(r.Context(), taskID, "", "info", "Worker "+workerID+" 已领取任务")
-	writeJSON(w, http.StatusOK, map[string]any{"task": map[string]any{"id": taskID, "name": name, "scope_snapshot": jsonRaw(scope), "rule_snapshot": jsonRaw(rule)}})
+	writeJSON(w, http.StatusOK, map[string]any{"task": map[string]any{"id": taskID, "name": name, "scope_snapshot": jsonRaw(scope), "rule_snapshot": jsonRaw(rule), "targets": targets}})
 }
 
 func (s *Server) handleWorkerStepResult(w http.ResponseWriter, r *http.Request) {
