@@ -51,6 +51,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/ai/chat", s.auth(s.handleAIChat))
 	s.mux.HandleFunc("GET /api/resources", s.auth(s.handleListResources))
 	s.mux.HandleFunc("POST /api/resources", s.auth(s.handleCreateResource))
+	s.mux.HandleFunc("POST /api/resources/import", s.auth(s.handleImportResources))
+	s.mux.HandleFunc("POST /api/resources/{id}/credential", s.auth(s.handleUpsertResourceCredential))
 	s.mux.HandleFunc("GET /api/environments", s.auth(s.handleListEnvironments))
 	s.mux.HandleFunc("POST /api/environments", s.auth(s.handleCreateEnvironment))
 	s.mux.HandleFunc("POST /api/environments/{id}/resources", s.auth(s.handleBindEnvironmentResource))
@@ -76,8 +78,17 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/reports/{task_id}", s.auth(s.handleGetReportByTask))
 	s.mux.HandleFunc("GET /api/reports/{task_id}/preview", s.auth(s.handlePreviewReport))
 	s.mux.HandleFunc("POST /api/reports/{task_id}/ai-diagnosis", s.auth(s.handleReportDiagnosis))
+	s.mux.HandleFunc("POST /api/reports/{task_id}/exports", s.auth(s.handleCreateReportExport))
+	s.mux.HandleFunc("GET /api/report-exports/{id}/download", s.auth(s.handleDownloadReportExport))
 	s.mux.HandleFunc("GET /api/ai/providers", s.auth(s.handleListAIProviders))
 	s.mux.HandleFunc("POST /api/ai/providers", s.auth(s.handleCreateAIProvider))
+	s.mux.HandleFunc("GET /api/ai/prompts", s.auth(s.handleListPrompts))
+	s.mux.HandleFunc("POST /api/ai/prompts", s.auth(s.handleCreatePrompt))
+	s.mux.HandleFunc("POST /api/integrations/jumpserver/config", s.auth(s.handleSaveJumpServerConfig))
+	s.mux.HandleFunc("GET /api/integrations/jumpserver/config", s.auth(s.handleListJumpServerConfigs))
+	s.mux.HandleFunc("POST /api/integrations/jumpserver/config/{id}/test", s.auth(s.handleTestJumpServerConfig))
+	s.mux.HandleFunc("POST /api/integrations/jumpserver/sync-jobs", s.auth(s.handleCreateJumpServerSyncJob))
+	s.mux.HandleFunc("GET /api/integrations/jumpserver/sync-jobs", s.auth(s.handleListJumpServerSyncJobs))
 	s.mux.HandleFunc("GET /api/users", s.auth(s.handleListUsers))
 	s.mux.HandleFunc("GET /api/roles", s.auth(s.handleListRoles))
 	s.mux.HandleFunc("GET /api/audit-logs", s.auth(s.handleListAuditLogs))
@@ -197,6 +208,7 @@ func (s *Server) handleAIWorkbench(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Message string `json:"message"`
+		Stream  bool   `json:"stream"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -221,6 +233,14 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	body, _ := json.Marshal(reply)
 	_, _ = s.db.Exec(r.Context(), "insert into ai_chat_messages (id, session_id, role, content, action_result) values ($1,$2,'assistant',$3,$4)", replyID, sessionID, reply["content"], body)
 	_ = s.audit(r.Context(), user.ID, user.Username, "ai.chat", "ai_session", sessionID, "success", r.RemoteAddr, map[string]any{"action": action})
+	if req.Stream || strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+		writeSSE(w, []map[string]any{
+			{"type": "message", "content": reply["content"]},
+			{"type": "workflow", "workflow": reply["workflow"]},
+			{"type": "done", "session_id": sessionID},
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"session_id": sessionID, "message": reply})
 }
 
@@ -242,7 +262,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		out = append(out, map[string]any{"id": id, "name": name, "resource_type": typ, "host": host, "port": port, "protocol": protocol, "status": status, "owner": owner, "source": source, "tags": jsonRaw(tags), "metadata": jsonRaw(meta), "last_check_at": last, "created_at": created, "updated_at": updated})
+		out = append(out, map[string]any{"id": id, "name": name, "resource_type": typ, "host": host, "port": port, "protocol": protocol, "status": status, "owner": owner, "source": source, "tags": jsonRaw(tags), "metadata": jsonRaw(meta), "credential_configured": s.credentialConfigured(r.Context(), id), "last_check_at": last, "created_at": created, "updated_at": updated})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out, "categories": resourceCategories(out)})
 }

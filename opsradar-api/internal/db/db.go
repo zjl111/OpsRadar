@@ -146,6 +146,51 @@ var schema = []string{
 		created_at timestamptz not null default now(),
 		unique(environment_id, resource_id)
 	)`,
+	`create table if not exists resource_credentials (
+		id text primary key,
+		resource_id text not null references resources(id) on delete cascade,
+		credential_type text not null default 'password',
+		username text not null default '',
+		secret_cipher text not null default '',
+		configured boolean not null default false,
+		created_at timestamptz not null default now(),
+		updated_at timestamptz not null default now()
+	)`,
+	`create unique index if not exists idx_resource_credentials_resource_id on resource_credentials(resource_id)`,
+	`create table if not exists resource_import_batches (
+		id text primary key,
+		source text not null default 'manual',
+		status text not null default 'finished',
+		total_count integer not null default 0,
+		success_count integer not null default 0,
+		failed_count integer not null default 0,
+		error_message text not null default '',
+		created_by text references users(id),
+		created_at timestamptz not null default now()
+	)`,
+	`create table if not exists jumpserver_configs (
+		id text primary key,
+		name text not null,
+		base_url text not null,
+		token_cipher text not null default '',
+		node_filter text not null default '',
+		tag_filter jsonb not null default '[]'::jsonb,
+		enabled boolean not null default true,
+		created_at timestamptz not null default now(),
+		updated_at timestamptz not null default now()
+	)`,
+	`create table if not exists jumpserver_sync_jobs (
+		id text primary key,
+		config_id text references jumpserver_configs(id),
+		status text not null default 'pending',
+		total_count integer not null default 0,
+		success_count integer not null default 0,
+		failed_count integer not null default 0,
+		logs jsonb not null default '[]'::jsonb,
+		started_at timestamptz,
+		finished_at timestamptz,
+		created_at timestamptz not null default now()
+	)`,
 	`create table if not exists inspection_items (
 		id text primary key,
 		name text not null,
@@ -255,6 +300,17 @@ var schema = []string{
 		ai_diagnosis jsonb not null default '{}'::jsonb,
 		created_at timestamptz not null default now()
 	)`,
+	`create table if not exists report_exports (
+		id text primary key,
+		task_id text not null references inspection_tasks(id) on delete cascade,
+		report_id text references inspection_reports(id) on delete cascade,
+		format text not null,
+		status text not null default 'generated',
+		file_name text not null default '',
+		content_type text not null default '',
+		file_content text not null default '',
+		created_at timestamptz not null default now()
+	)`,
 	`create table if not exists workers (
 		id text primary key,
 		name text not null,
@@ -304,6 +360,16 @@ var schema = []string{
 		content text not null,
 		action_result jsonb not null default '{}'::jsonb,
 		created_at timestamptz not null default now()
+	)`,
+	`create table if not exists prompt_templates (
+		id text primary key,
+		name text not null,
+		scene text not null,
+		version integer not null default 1,
+		content text not null,
+		enabled boolean not null default true,
+		created_at timestamptz not null default now(),
+		unique(scene, version)
 	)`,
 	`create table if not exists repair_tasks (
 		id text primary key,
