@@ -237,8 +237,10 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	_, _ = s.db.Exec(r.Context(), "insert into ai_chat_sessions (id, user_id, title) values ($1,$2,$3)", sessionID, user.ID, "AI 巡检会话")
 	_, _ = s.db.Exec(r.Context(), "insert into ai_chat_messages (id, session_id, role, content) values ($1,$2,'user',$3)", messageID, sessionID, req.Message)
 	action := inferAction(req.Message)
+	aiContent, aiMeta := s.callAI(r.Context(), "assistant_chat", "我已根据当前平台数据生成一个可确认的巡检工作流草稿。", req.Message)
 	reply := map[string]any{
-		"content": "我已根据当前平台数据生成一个可确认的巡检工作流草稿。",
+		"content": aiContent,
+		"ai":      aiMeta,
 		"workflow": map[string]any{
 			"intent":                action,
 			"requires_confirmation": action == "create_inspection_task" || action == "start_inspection_task",
@@ -584,16 +586,19 @@ func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAnalyzeIssue(w http.ResponseWriter, r *http.Request) {
 	issueID := r.PathValue("id")
 	insightID := security.NewID("insight")
+	issue, _ := queryOne(r.Context(), s.db, `select id,title,status,severity,description,evidence from issues where id=$1`, []string{"id", "title", "status", "severity", "description", "evidence"}, issueID)
+	fallback := "AI 根据巡检输出、资源信息和历史任务判断：该问题需要优先确认目标服务连通性与配置阈值。"
+	content, aiMeta := s.callAI(r.Context(), "issue_analysis", fallback, "问题上下文："+toJSONString(issue))
 	_, err := s.db.Exec(r.Context(), `insert into issue_insights (id,issue_id,summary,probable_causes,repair_suggestion,verification_steps,confidence) values ($1,$2,$3,$4,$5,$6,$7)`,
-		insightID, issueID, "AI 根据巡检输出、资源信息和历史任务判断：该问题需要优先确认目标服务连通性与配置阈值。", `["目标资源不可达","服务响应异常","巡检阈值不匹配"]`, "先执行复测，确认仍异常后按证据链逐项修复。", `["重新执行相同巡检项","确认服务端口与认证配置","修复后再次复测"]`, 0.72)
+		insightID, issueID, content, toJSONString([]string{"目标资源不可达", "服务响应异常", "巡检阈值不匹配"}), "先执行复测，确认仍异常后按证据链逐项修复。", toJSONString([]string{"重新执行相同巡检项", "确认服务端口与认证配置", "修复后再次复测"}), 0.72)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	_, _ = s.db.Exec(r.Context(), `update issues set ai_status='analyzed', updated_at=now() where id=$1`, issueID)
 	u := currentUser(r)
-	_ = s.audit(r.Context(), u.ID, u.Username, "ai.analyze_issue", "issue", issueID, "success", r.RemoteAddr, nil)
-	writeJSON(w, http.StatusCreated, map[string]any{"id": insightID})
+	_ = s.audit(r.Context(), u.ID, u.Username, "ai.analyze_issue", "issue", issueID, "success", r.RemoteAddr, aiMeta)
+	writeJSON(w, http.StatusCreated, map[string]any{"id": insightID, "ai": aiMeta})
 }
 
 func (s *Server) handleListReports(w http.ResponseWriter, r *http.Request) {
@@ -617,10 +622,13 @@ func (s *Server) handlePreviewReport(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReportDiagnosis(w http.ResponseWriter, r *http.Request) {
 	taskID := r.PathValue("task_id")
+	report, _ := queryOne(r.Context(), s.db, `select id,name,health_score,ai_diagnosis from inspection_reports where task_id=$1 order by created_at desc limit 1`, []string{"id", "name", "health_score", "ai_diagnosis"}, taskID)
+	content, aiMeta := s.callAI(r.Context(), "report_diagnosis", "AI 综合诊断已生成：本次巡检结论基于任务快照、步骤结果和问题证据。", "报告上下文："+toJSONString(report))
 	diagnosis := map[string]any{
-		"summary":         "AI 综合诊断已生成：本次巡检结论基于任务快照、步骤结果和问题证据。",
+		"summary":         content,
 		"top_risks":       []string{"异常巡检项需要优先复测", "未关闭问题会影响环境健康分"},
 		"recommendations": []string{"按严重级别处理问题", "修复后执行复测并归档报告"},
+		"ai":              aiMeta,
 	}
 	body, _ := json.Marshal(diagnosis)
 	_, err := s.db.Exec(r.Context(), `update inspection_reports set ai_diagnosis=$1 where task_id=$2`, body, taskID)

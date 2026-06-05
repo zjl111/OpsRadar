@@ -155,6 +155,14 @@ func asString(value any) string {
 	return fmt.Sprint(value)
 }
 
+func toJSONString(value any) string {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(body)
+}
+
 func levelByCount(n int) string {
 	if n > 10 {
 		return "critical"

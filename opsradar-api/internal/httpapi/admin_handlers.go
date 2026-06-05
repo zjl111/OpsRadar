@@ -141,9 +141,14 @@ func (s *Server) handleCreateAIProvider(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	settings, _ := json.Marshal(req.Settings)
+	cipher, err := security.EncryptSecret(s.cfg.JWTSecret, req.APIKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	id := security.NewID("aip")
-	_, err := s.db.Exec(r.Context(), `insert into ai_model_providers (id,name,endpoint,model,api_key_cipher,settings) values ($1,$2,$3,$4,$5,$6)`,
-		id, req.Name, req.Endpoint, req.Model, maskSensitive(req.APIKey), settings)
+	_, err = s.db.Exec(r.Context(), `insert into ai_model_providers (id,name,endpoint,model,api_key_cipher,settings) values ($1,$2,$3,$4,$5,$6)`,
+		id, req.Name, req.Endpoint, req.Model, cipher, settings)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
