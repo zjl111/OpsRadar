@@ -150,6 +150,23 @@ async function saveDataSource() {
   operationMessage.value = `数据源已保存：${result.id}`
 }
 
+async function createRepairForIssue(issueId: string) {
+  const repair = await api<{ id: string }>('/api/repair-tasks', {
+    method: 'POST',
+    body: JSON.stringify({ issue_id: issueId, plan: { executor: 'script', command: 'echo repair-ok', timeout_seconds: 5 } })
+  })
+  await api(`/api/repair-tasks/${repair.id}/confirm`, { method: 'POST' })
+  await api(`/api/repair-tasks/${repair.id}/execute`, { method: 'POST' })
+  operationMessage.value = `修复任务已进入队列：${repair.id}`
+}
+
+async function retestIssue(issueId: string) {
+  const result = await api<{ task_id: string }>(`/api/issues/${issueId}/retest`, { method: 'POST' })
+  operationMessage.value = `复测任务已创建：${result.task_id}`
+  active.value = 'tasks'
+  await refreshAll()
+}
+
 function logout() {
   clearToken()
   user.value = null
@@ -297,6 +314,10 @@ onMounted(async () => {
               <b :class="`level ${issue.severity}`">{{ issue.severity }}</b>
               <span>{{ issue.title }}</span>
               <small>{{ issue.status }} · AI {{ issue.ai_status }}</small>
+              <div class="row-actions">
+                <button @click="createRepairForIssue(issue.id)">修复</button>
+                <button @click="retestIssue(issue.id)">复测</button>
+              </div>
             </li>
           </ul>
         </article>
