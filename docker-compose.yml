@@ -1,0 +1,42 @@
+services:
+  opsradar-api:
+    build:
+      context: .
+      dockerfile: opsradar-api/Dockerfile
+    env_file:
+      - .env
+    environment:
+      OPSRADAR_HTTP_ADDR: ":8080"
+      OPSRADAR_DATABASE_URL: ${OPSRADAR_DOCKER_DATABASE_URL:-postgres://postgres:postgres@host.docker.internal:5432/opsradar?sslmode=disable}
+      OPSRADAR_REDIS_ADDR: ${OPSRADAR_DOCKER_REDIS_ADDR:-host.docker.internal:6379}
+    ports:
+      - "8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  opsradar-worker-agent:
+    build:
+      context: .
+      dockerfile: opsradar-worker-agent/Dockerfile
+    env_file:
+      - .env
+    environment:
+      OPSRADAR_API_URL: http://opsradar-api:8080
+      OPSRADAR_WORKER_TOKEN: ${OPSRADAR_WORKER_TOKEN:-dev-worker-token}
+      OPSRADAR_WORKER_NAME: ${OPSRADAR_WORKER_NAME:-worker-compose-01}
+      OPSRADAR_WORKER_REGION: ${OPSRADAR_WORKER_REGION:-local}
+      OPSRADAR_WORKER_ZONE: ${OPSRADAR_WORKER_ZONE:-compose}
+    depends_on:
+      - opsradar-api
+    restart: unless-stopped
+
+  opsradar-web:
+    build:
+      context: .
+      dockerfile: opsradar-web/Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - opsradar-api
+    restart: unless-stopped
