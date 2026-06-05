@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -57,6 +58,8 @@ func Run(ctx context.Context, resource Resource, item Item) Result {
 		output, errText = runSSH(ctx, resource, item.Script)
 	case "ansible", "ansible-runner":
 		output, errText = runAnsibleRunner(ctx, item.Script)
+	case "kubernetes", "k8s":
+		output, errText = runKubernetes(ctx, resource, item.Script)
 	default:
 		output = fmt.Sprintf("resource %s skipped by worker; executor for %s is not implemented yet", resource.Name, executor)
 	}
@@ -262,4 +265,51 @@ func runAnsibleRunner(ctx context.Context, script map[string]any) (string, strin
 		return string(out), err.Error()
 	}
 	return string(out), ""
+}
+
+func runKubernetes(ctx context.Context, resource Resource, script map[string]any) (string, string) {
+	if resource.Host == "" {
+		return "", "kubernetes api host is empty"
+	}
+	scheme := resource.Protocol
+	if scheme == "" {
+		scheme = "https"
+	}
+	host := resource.Host
+	if resource.Port > 0 {
+		host = fmt.Sprintf("%s:%d", resource.Host, resource.Port)
+	}
+	path, _ := script["path"].(string)
+	if path == "" {
+		path = "/readyz"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	timeout := 10 * time.Second
+	if seconds, ok := script["timeout_seconds"].(float64); ok && seconds > 0 {
+		timeout = time.Duration(seconds) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s://%s%s", scheme, host, path), nil)
+	if err != nil {
+		return "", err.Error()
+	}
+	if resource.Secret != "" {
+		req.Header.Set("Authorization", "Bearer "+resource.Secret)
+	}
+	client := &http.Client{Timeout: timeout}
+	if scheme == "https" {
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err.Error()
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		return fmt.Sprintf("status=%d path=%s", resp.StatusCode, path), "kubernetes api returned error status"
+	}
+	return fmt.Sprintf("status=%d path=%s", resp.StatusCode, path), ""
 }
