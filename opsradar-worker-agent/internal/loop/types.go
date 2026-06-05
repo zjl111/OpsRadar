@@ -66,3 +66,9 @@ type StepResult struct {
 	Error       string `json:"error,omitempty"`
 	DurationMS  int    `json:"duration_ms"`
 }
+
+type RepairTask struct {
+	ID      string         `json:"id"`
+	IssueID string         `json:"issue_id"`
+	Plan    map[string]any `json:"plan"`
+}

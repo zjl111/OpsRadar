@@ -47,6 +47,14 @@ func (c *Client) NextTask(ctx context.Context) (*Task, error) {
 	return out.Task, err
 }
 
+func (c *Client) NextRepair(ctx context.Context) (*RepairTask, error) {
+	var out struct {
+		RepairTask *RepairTask `json:"repair_task"`
+	}
+	err := c.doJSON(ctx, http.MethodGet, "/api/worker/next-repair?worker_id="+c.cfg.ID, nil, &out)
+	return out.RepairTask, err
+}
+
 func (c *Client) StepResult(ctx context.Context, result StepResult) error {
 	var out map[string]any
 	return c.doJSON(ctx, http.MethodPost, "/api/worker/step-result", result, &out)
@@ -66,6 +74,11 @@ func (c *Client) TaskComplete(ctx context.Context, taskID, status string, summar
 func (c *Client) RenewTaskLease(ctx context.Context, taskID string, seconds int) error {
 	var out map[string]any
 	return c.doJSON(ctx, http.MethodPost, "/api/worker/task-lease", map[string]any{"task_id": taskID, "worker_id": c.cfg.ID, "seconds": seconds}, &out)
+}
+
+func (c *Client) RepairComplete(ctx context.Context, id, status string, result map[string]any, logs []string) error {
+	var out map[string]any
+	return c.doJSON(ctx, http.MethodPost, "/api/worker/repair-complete", map[string]any{"id": id, "status": status, "result": result, "logs": logs, "worker_id": c.cfg.ID}, &out)
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, body any, out any) error {

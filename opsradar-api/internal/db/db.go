@@ -418,8 +418,18 @@ var schema = []string{
 		issue_id text references issues(id),
 		status text not null default 'draft',
 		plan jsonb not null default '{}'::jsonb,
+		worker_id text not null default '',
+		result jsonb not null default '{}'::jsonb,
+		logs jsonb not null default '[]'::jsonb,
 		confirmed_by text references users(id),
+		started_at timestamptz,
+		finished_at timestamptz,
 		created_at timestamptz not null default now(),
 		updated_at timestamptz not null default now()
 	)`,
+	`alter table repair_tasks add column if not exists worker_id text not null default ''`,
+	`alter table repair_tasks add column if not exists result jsonb not null default '{}'::jsonb`,
+	`alter table repair_tasks add column if not exists logs jsonb not null default '[]'::jsonb`,
+	`alter table repair_tasks add column if not exists started_at timestamptz`,
+	`alter table repair_tasks add column if not exists finished_at timestamptz`,
 }

@@ -103,10 +103,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/workers", s.auth(s.handleListWorkers))
 	s.mux.HandleFunc("POST /api/workers/heartbeat", s.workerAuth(s.handleWorkerHeartbeat))
 	s.mux.HandleFunc("GET /api/worker/next", s.workerAuth(s.handleWorkerNext))
+	s.mux.HandleFunc("GET /api/worker/next-repair", s.workerAuth(s.handleWorkerNextRepair))
 	s.mux.HandleFunc("GET /api/worker/resources/{id}/credential", s.workerAuth(s.handleWorkerResourceCredential))
 	s.mux.HandleFunc("POST /api/worker/task-lease", s.workerAuth(s.handleWorkerTaskLease))
 	s.mux.HandleFunc("POST /api/worker/step-result", s.workerAuth(s.handleWorkerStepResult))
 	s.mux.HandleFunc("POST /api/worker/task-complete", s.workerAuth(s.handleWorkerTaskComplete))
+	s.mux.HandleFunc("POST /api/worker/repair-complete", s.workerAuth(s.handleWorkerRepairComplete))
 }
 
 func (s *Server) StartScheduler(ctx context.Context) {
@@ -724,6 +726,78 @@ func (s *Server) handleWorkerResourceCredential(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"configured": true, "credential_type": typ, "username": username, "secret": secret})
+}
+
+func (s *Server) handleWorkerNextRepair(w http.ResponseWriter, r *http.Request) {
+	workerID := r.URL.Query().Get("worker_id")
+	if workerID == "" {
+		writeError(w, http.StatusBadRequest, "worker_id is required")
+		return
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback(r.Context())
+	row := tx.QueryRow(r.Context(), `select id,issue_id,plan from repair_tasks where status='queued' order by created_at asc for update skip locked limit 1`)
+	var id string
+	var issueID *string
+	var plan []byte
+	if err := row.Scan(&id, &issueID, &plan); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusOK, map[string]any{"repair_task": nil})
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_, err = tx.Exec(r.Context(), `update repair_tasks set status='running', worker_id=$1, started_at=now(), updated_at=now() where id=$2`, workerID, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"repair_task": map[string]any{"id": id, "issue_id": issueID, "plan": jsonRaw(plan)}})
+}
+
+func (s *Server) handleWorkerRepairComplete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID       string         `json:"id"`
+		Status   string         `json:"status"`
+		Result   map[string]any `json:"result"`
+		Logs     []string       `json:"logs"`
+		WorkerID string         `json:"worker_id"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.ID == "" {
+		writeError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	status := defaultString(req.Status, "finished")
+	if status != "finished" && status != "failed" {
+		status = "failed"
+	}
+	result, _ := json.Marshal(req.Result)
+	logs, _ := json.Marshal(req.Logs)
+	_, err := s.db.Exec(r.Context(), `update repair_tasks set status=$1,result=$2,logs=$3,finished_at=now(),updated_at=now() where id=$4 and status='running'`, status, result, logs, req.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var issueID *string
+	_ = s.db.QueryRow(r.Context(), `select issue_id from repair_tasks where id=$1`, req.ID).Scan(&issueID)
+	if issueID != nil && status == "finished" {
+		_, _ = s.db.Exec(r.Context(), `update issues set status='fixing', updated_at=now() where id=$1 and status in ('open','confirmed','fixing')`, *issueID)
+	}
+	go s.dispatchNotification(context.Background(), "repair.completed", "修复任务完成", "修复任务 "+req.ID+" 状态："+status, map[string]any{"repair_task_id": req.ID, "issue_id": issueID, "status": status})
+	writeJSON(w, http.StatusOK, map[string]any{"id": req.ID, "status": status})
 }
 
 func (s *Server) handleWorkerTaskLease(w http.ResponseWriter, r *http.Request) {

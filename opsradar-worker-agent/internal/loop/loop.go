@@ -44,16 +44,27 @@ func (r *Runner) Run(ctx context.Context) error {
 			task, err := r.client.NextTask(ctx)
 			if err != nil {
 				log.Printf("poll task failed: %v", err)
+			}
+			if task != nil {
+				r.running.Add(1)
+				go func() {
+					defer r.running.Add(-1)
+					r.executeTask(ctx, *task)
+				}()
 				continue
 			}
-			if task == nil {
+			repair, err := r.client.NextRepair(ctx)
+			if err != nil {
+				log.Printf("poll repair failed: %v", err)
 				continue
 			}
-			r.running.Add(1)
-			go func() {
-				defer r.running.Add(-1)
-				r.executeTask(ctx, *task)
-			}()
+			if repair != nil {
+				r.running.Add(1)
+				go func() {
+					defer r.running.Add(-1)
+					r.executeRepair(ctx, *repair)
+				}()
+			}
 		}
 	}
 }
@@ -134,6 +145,42 @@ func (r *Runner) renewLease(ctx context.Context, taskID string) {
 			}
 		}
 	}
+}
+
+func (r *Runner) executeRepair(ctx context.Context, repair RepairTask) {
+	log.Printf("executing repair %s", repair.ID)
+	result := executor.Run(ctx, executor.Resource{Name: "repair", ResourceType: "script"}, executor.Item{ID: repair.ID, Executor: defaultExecutor(repair.Plan), Script: normalizeRepairPlan(repair.Plan)})
+	status := "finished"
+	if result.Status != "success" {
+		status = "failed"
+	}
+	logs := []string{result.Output}
+	if result.Error != "" {
+		logs = append(logs, result.Error)
+	}
+	if err := r.client.RepairComplete(ctx, repair.ID, status, map[string]any{"duration_ms": result.DurationMS, "output": result.Output, "error": result.Error}, logs); err != nil {
+		log.Printf("complete repair failed: %v", err)
+	}
+}
+
+func normalizeRepairPlan(plan map[string]any) map[string]any {
+	if plan == nil {
+		return map[string]any{}
+	}
+	if command, ok := plan["command"].(string); ok && command != "" {
+		return map[string]any{"command": command, "timeout_seconds": plan["timeout_seconds"]}
+	}
+	if action, ok := plan["action"].(string); ok && action != "" {
+		return map[string]any{"command": action, "timeout_seconds": plan["timeout_seconds"]}
+	}
+	return plan
+}
+
+func defaultExecutor(plan map[string]any) string {
+	if executor, ok := plan["executor"].(string); ok && executor != "" {
+		return executor
+	}
+	return "script"
 }
 
 func selectItems(rule RuleSetSnapshot, resourceType string) []InspectionItem {

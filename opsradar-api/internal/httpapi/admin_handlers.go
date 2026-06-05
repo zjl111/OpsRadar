@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -109,12 +110,13 @@ func (s *Server) handleConfirmRepairTask(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleExecuteRepairTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	u := currentUser(r)
-	_, err := s.db.Exec(r.Context(), `update repair_tasks set status='queued', updated_at=now() where id=$1 and status in ('confirmed','draft')`, id)
+	_, err := s.db.Exec(r.Context(), `update repair_tasks set status='queued', updated_at=now() where id=$1 and status='confirmed'`, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	_ = s.audit(r.Context(), u.ID, u.Username, "repair_tasks.execute", "repair_task", id, "success", r.RemoteAddr, map[string]any{"note": "worker repair executor placeholder queued"})
+	go s.dispatchNotification(context.Background(), "repair.queued", "修复任务待执行", "修复任务 "+id+" 已进入 Worker 队列", map[string]any{"repair_task_id": id})
+	_ = s.audit(r.Context(), u.ID, u.Username, "repair_tasks.execute", "repair_task", id, "success", r.RemoteAddr, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "queued"})
 }
 
