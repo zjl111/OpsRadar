@@ -32,6 +32,8 @@ const importCsv = ref('name,resource_type,host,port,protocol,tags\nimport redis,
 const jumpserver = ref({ name: 'JumpServer', base_url: 'http://127.0.0.1:8081', token: '' })
 const prompt = ref({ name: '问题分析', scene: 'issue_analysis', content: '基于巡检输出、任务日志和证据链分析根因，并给出修复与复测步骤。' })
 const cronPlan = ref({ name: '每日默认巡检', interval_seconds: 86400 })
+const notification = ref({ name: 'Feishu', channel_type: 'webhook', endpoint: '', secret: '' })
+const dataSource = ref({ name: 'Prometheus', source_type: 'prometheus', endpoint: 'http://127.0.0.1:9090', secret: '' })
 const operationMessage = ref('')
 
 const stats = computed(() => bootstrap.value.stats || {})
@@ -130,6 +132,22 @@ async function createCronPlan() {
     body: JSON.stringify({ ...cronPlan.value, rule_set_id: 'ruleset_default' })
   })
   operationMessage.value = `周期计划已创建：${result.id}`
+}
+
+async function saveNotification() {
+  const result = await api<{ id: string }>('/api/notification-channels', {
+    method: 'POST',
+    body: JSON.stringify(notification.value)
+  })
+  operationMessage.value = `通知渠道已保存：${result.id}`
+}
+
+async function saveDataSource() {
+  const result = await api<{ id: string }>('/api/data-sources', {
+    method: 'POST',
+    body: JSON.stringify(dataSource.value)
+  })
+  operationMessage.value = `数据源已保存：${result.id}`
 }
 
 function logout() {
@@ -350,6 +368,26 @@ onMounted(async () => {
             <input v-model="cronPlan.name" placeholder="计划名称" />
             <input v-model.number="cronPlan.interval_seconds" type="number" placeholder="间隔秒数" />
             <button class="primary" @click="createCronPlan">创建计划</button>
+          </div>
+        </article>
+        <article class="panel">
+          <h2>通知渠道</h2>
+          <div class="settings-form">
+            <input v-model="notification.name" placeholder="名称" />
+            <input v-model="notification.channel_type" placeholder="类型" />
+            <input v-model="notification.endpoint" placeholder="Webhook / Endpoint" />
+            <input v-model="notification.secret" type="password" placeholder="Secret" />
+            <button class="primary" @click="saveNotification">保存渠道</button>
+          </div>
+        </article>
+        <article class="panel">
+          <h2>数据源</h2>
+          <div class="settings-form">
+            <input v-model="dataSource.name" placeholder="名称" />
+            <input v-model="dataSource.source_type" placeholder="类型" />
+            <input v-model="dataSource.endpoint" placeholder="Endpoint" />
+            <input v-model="dataSource.secret" type="password" placeholder="Secret" />
+            <button class="primary" @click="saveDataSource">保存数据源</button>
           </div>
         </article>
       </section>
