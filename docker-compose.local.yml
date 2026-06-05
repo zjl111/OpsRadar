@@ -1,0 +1,59 @@
+services:
+  opsradar-api:
+    build: .
+    env_file:
+      - .env.local
+    environment:
+      OPSRADAR_DATABASE_URL: ${OPSRADAR_DOCKER_DATABASE_URL:-postgresql+psycopg://postgres:postgres@host.docker.internal:5432/opsradar}
+      OPSRADAR_REDIS_URL: ${OPSRADAR_DOCKER_REDIS_URL:-redis://host.docker.internal:6379/0}
+      OPSRADAR_CELERY_BROKER_URL: ${OPSRADAR_DOCKER_CELERY_BROKER_URL:-redis://host.docker.internal:6379/0}
+      OPSRADAR_CELERY_RESULT_BACKEND: ${OPSRADAR_DOCKER_CELERY_RESULT_BACKEND:-redis://host.docker.internal:6379/1}
+      OPSRADAR_REPORT_DIR: /app/reports
+    command: >
+      sh -c "python3 -m backend.app.cli migrate &&
+             python3 -m backend.app.cli seed-builtin &&
+             python3 -m backend.app.cli init-admin &&
+             python3 -m backend.app.cli check &&
+             gunicorn backend.app.main:app --worker-class uvicorn.workers.UvicornWorker --workers $${OPSRADAR_API_WORKERS:-1} --bind 0.0.0.0:4173"
+    ports:
+      - "${OPSRADAR_LOCAL_PORT:-4173}:4173"
+    volumes:
+      - reports_data:/app/reports
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  opsradar-worker:
+    build: .
+    env_file:
+      - .env.local
+    environment:
+      OPSRADAR_DATABASE_URL: ${OPSRADAR_DOCKER_DATABASE_URL:-postgresql+psycopg://postgres:postgres@host.docker.internal:5432/opsradar}
+      OPSRADAR_REDIS_URL: ${OPSRADAR_DOCKER_REDIS_URL:-redis://host.docker.internal:6379/0}
+      OPSRADAR_CELERY_BROKER_URL: ${OPSRADAR_DOCKER_CELERY_BROKER_URL:-redis://host.docker.internal:6379/0}
+      OPSRADAR_CELERY_RESULT_BACKEND: ${OPSRADAR_DOCKER_CELERY_RESULT_BACKEND:-redis://host.docker.internal:6379/1}
+      OPSRADAR_REPORT_DIR: /app/reports
+    command: celery -A backend.app.worker.celery_app worker --loglevel=info --concurrency=${OPSRADAR_WORKER_CONCURRENCY:-2}
+    volumes:
+      - reports_data:/app/reports
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - opsradar-api
+
+  opsradar-beat:
+    build: .
+    env_file:
+      - .env.local
+    environment:
+      OPSRADAR_DATABASE_URL: ${OPSRADAR_DOCKER_DATABASE_URL:-postgresql+psycopg://postgres:postgres@host.docker.internal:5432/opsradar}
+      OPSRADAR_REDIS_URL: ${OPSRADAR_DOCKER_REDIS_URL:-redis://host.docker.internal:6379/0}
+      OPSRADAR_CELERY_BROKER_URL: ${OPSRADAR_DOCKER_CELERY_BROKER_URL:-redis://host.docker.internal:6379/0}
+      OPSRADAR_CELERY_RESULT_BACKEND: ${OPSRADAR_DOCKER_CELERY_RESULT_BACKEND:-redis://host.docker.internal:6379/1}
+    command: python3 -m backend.app.beat
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - opsradar-worker
+
+volumes:
+  reports_data:

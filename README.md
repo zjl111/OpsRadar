@@ -97,6 +97,11 @@ Start local PostgreSQL and Redis first, then run:
 
 ```bash
 python3 -m pip install -r requirements.txt
+python3 scripts/init_local_db.py --database opsradar
+export OPSRADAR_DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/opsradar
+export OPSRADAR_REDIS_URL=redis://127.0.0.1:6379/0
+export OPSRADAR_CELERY_BROKER_URL=redis://127.0.0.1:6379/0
+export OPSRADAR_CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/1
 python3 -m backend.app.cli migrate
 python3 -m backend.app.cli seed-builtin
 python3 -m backend.app.cli init-admin
@@ -108,6 +113,24 @@ Run the worker in another terminal:
 ```bash
 bash scripts/run_worker.sh
 ```
+
+Open `http://127.0.0.1:4173/`.
+
+### Local Docker Compose With Existing PostgreSQL / Redis
+
+If PostgreSQL and Redis already run on the host, copy `.env.local.example` and start only the OpsRadar services:
+
+```bash
+cp .env.local.example .env.local
+python3 scripts/init_local_db.py --database opsradar
+docker compose -f docker-compose.local.yml --env-file .env.local up -d --build
+```
+
+The local compose file connects containers to:
+
+- PostgreSQL: `postgresql+psycopg://postgres:postgres@host.docker.internal:5432/opsradar`
+- Redis broker: `redis://host.docker.internal:6379/0`
+- Redis result backend: `redis://host.docker.internal:6379/1`
 
 Open `http://127.0.0.1:4173/`.
 
