@@ -12,6 +12,10 @@ func (s *Server) handleListNotificationChannels(w http.ResponseWriter, r *http.R
 	writeRows(w, r, s.db, `select id,name,channel_type,endpoint,enabled,settings,created_at,updated_at from notification_channels order by created_at desc`, []string{"id", "name", "channel_type", "endpoint", "enabled", "settings", "created_at", "updated_at"})
 }
 
+func (s *Server) handleListNotificationDeliveries(w http.ResponseWriter, r *http.Request) {
+	writeRows(w, r, s.db, `select id,channel_id,event_type,title,content,status,error_message,payload,created_at,delivered_at from notification_deliveries order by created_at desc limit 200`, []string{"id", "channel_id", "event_type", "title", "content", "status", "error_message", "payload", "created_at", "delivered_at"})
+}
+
 func (s *Server) handleCreateNotificationChannel(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name        string         `json:"name"`

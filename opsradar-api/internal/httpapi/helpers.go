@@ -299,6 +299,9 @@ func (s *Server) createIssueFromStep(ctx context.Context, taskID, targetRunID, i
 	body, _ := json.Marshal(evidence)
 	_, err := s.db.Exec(ctx, `insert into issues (id,title,status,severity,task_id,target_run_id,resource_id,environment_id,item_id,ai_status,description,evidence) values ($1,$2,'open',$3,$4,$5,$6,$7,$8,'pending',$9,$10)`,
 		security.NewID("issue"), "巡检步骤异常："+defaultString(itemID, "custom"), severityFromStatus(status), taskID, targetRunID, nullable(resourceID), nullable(envID), nullText(itemID), "Worker 自动从失败巡检结果生成问题。", body)
+	if err == nil {
+		go s.dispatchNotification(context.Background(), "issue.created", "巡检发现异常", "任务 "+taskID+" 生成异常问题："+defaultString(itemID, "custom"), map[string]any{"task_id": taskID, "target_run_id": targetRunID, "item_id": itemID, "status": status})
+	}
 	return err
 }
 

@@ -388,6 +388,18 @@ var schema = []string{
 		created_at timestamptz not null default now(),
 		updated_at timestamptz not null default now()
 	)`,
+	`create table if not exists notification_deliveries (
+		id text primary key,
+		channel_id text references notification_channels(id) on delete set null,
+		event_type text not null,
+		title text not null,
+		content text not null,
+		status text not null default 'pending',
+		error_message text not null default '',
+		payload jsonb not null default '{}'::jsonb,
+		created_at timestamptz not null default now(),
+		delivered_at timestamptz
+	)`,
 	`create table if not exists data_sources (
 		id text primary key,
 		name text not null,

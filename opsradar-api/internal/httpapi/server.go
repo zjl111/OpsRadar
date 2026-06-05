@@ -88,6 +88,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/notification-channels", s.auth(s.handleListNotificationChannels))
 	s.mux.HandleFunc("POST /api/notification-channels", s.auth(s.handleCreateNotificationChannel))
 	s.mux.HandleFunc("POST /api/notification-channels/{id}/test", s.auth(s.handleTestNotificationChannel))
+	s.mux.HandleFunc("GET /api/notification-deliveries", s.auth(s.handleListNotificationDeliveries))
 	s.mux.HandleFunc("GET /api/data-sources", s.auth(s.handleListDataSources))
 	s.mux.HandleFunc("POST /api/data-sources", s.auth(s.handleCreateDataSource))
 	s.mux.HandleFunc("POST /api/data-sources/{id}/test", s.auth(s.handleTestDataSource))
@@ -800,6 +801,7 @@ func (s *Server) handleWorkerTaskComplete(w http.ResponseWriter, r *http.Request
 	_, _ = s.db.Exec(r.Context(), `update target_runs set status=$1, finished_at=now() where task_id=$2 and status='running'`, status, req.TaskID)
 	_ = s.generateReport(r.Context(), req.TaskID)
 	_ = s.writeTaskLog(r.Context(), req.TaskID, "", "info", "任务已完成并生成 HTML 报告")
+	go s.dispatchNotification(context.Background(), "task.completed", "巡检任务完成", "任务 "+req.TaskID+" 状态："+status, map[string]any{"task_id": req.TaskID, "status": status, "summary": req.Summary})
 	writeJSON(w, http.StatusOK, map[string]any{"id": req.TaskID, "status": status})
 }
 
