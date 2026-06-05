@@ -57,6 +57,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/environments", s.auth(s.handleCreateEnvironment))
 	s.mux.HandleFunc("POST /api/environments/{id}/resources", s.auth(s.handleBindEnvironmentResource))
 	s.mux.HandleFunc("GET /api/inspection-items", s.auth(s.handleListInspectionItems))
+	s.mux.HandleFunc("POST /api/inspection-items", s.auth(s.handleCreateInspectionItem))
 	s.mux.HandleFunc("GET /api/rule-sets", s.auth(s.handleListRuleSets))
 	s.mux.HandleFunc("POST /api/rule-sets", s.auth(s.handleCreateRuleSet))
 	s.mux.HandleFunc("GET /api/tasks", s.auth(s.handleListTasks))
@@ -401,6 +402,38 @@ func (s *Server) handleBindEnvironmentResource(w http.ResponseWriter, r *http.Re
 
 func (s *Server) handleListInspectionItems(w http.ResponseWriter, r *http.Request) {
 	writeRows(w, r, s.db, `select id,name,item_type,resource_type,severity,executor,script,rule,enabled,created_at from inspection_items order by created_at desc`, []string{"id", "name", "item_type", "resource_type", "severity", "executor", "script", "rule", "enabled", "created_at"})
+}
+
+func (s *Server) handleCreateInspectionItem(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name         string         `json:"name"`
+		ItemType     string         `json:"item_type"`
+		ResourceType string         `json:"resource_type"`
+		Severity     string         `json:"severity"`
+		Executor     string         `json:"executor"`
+		Script       map[string]any `json:"script"`
+		Rule         map[string]any `json:"rule"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" || req.Executor == "" {
+		writeError(w, http.StatusBadRequest, "name and executor are required")
+		return
+	}
+	script, _ := json.Marshal(req.Script)
+	rule, _ := json.Marshal(req.Rule)
+	id := security.NewID("item")
+	_, err := s.db.Exec(r.Context(), `insert into inspection_items (id,name,item_type,resource_type,severity,executor,script,rule,enabled) values ($1,$2,$3,$4,$5,$6,$7,$8,true)`,
+		id, req.Name, defaultString(req.ItemType, "custom"), req.ResourceType, defaultString(req.Severity, "medium"), req.Executor, script, rule)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	u := currentUser(r)
+	_ = s.audit(r.Context(), u.ID, u.Username, "inspection_items.create", "inspection_item", id, "success", r.RemoteAddr, nil)
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
 }
 
 func (s *Server) handleListRuleSets(w http.ResponseWriter, r *http.Request) {

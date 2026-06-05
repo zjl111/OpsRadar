@@ -81,7 +81,7 @@ func (r *Runner) executeTask(ctx context.Context, task Task) {
 				resource.Credential = credential
 			}
 		}
-		for _, itemID := range selectItems(task.RuleSnapshot.ItemIDs, resource.ResourceType) {
+		for _, item := range selectItems(task.RuleSnapshot, resource.ResourceType) {
 			result := executor.Run(ctx, executor.Resource{
 				Name:         resource.Name,
 				ResourceType: resource.ResourceType,
@@ -90,7 +90,7 @@ func (r *Runner) executeTask(ctx context.Context, task Task) {
 				Protocol:     resource.Protocol,
 				Username:     resource.Credential.Username,
 				Secret:       resource.Credential.Secret,
-			}, itemID)
+			}, executor.Item{ID: item.ID, Executor: item.Executor, Script: item.Script})
 			if result.Status == "success" {
 				success++
 			} else {
@@ -99,7 +99,7 @@ func (r *Runner) executeTask(ctx context.Context, task Task) {
 			err := r.client.StepResult(ctx, StepResult{
 				TaskID:      task.ID,
 				TargetRunID: target.ID,
-				ItemID:      itemID,
+				ItemID:      item.ID,
 				Status:      result.Status,
 				Output:      result.Output,
 				Error:       result.Error,
@@ -136,31 +136,42 @@ func (r *Runner) renewLease(ctx context.Context, taskID string) {
 	}
 }
 
-func selectItems(itemIDs []string, resourceType string) []string {
-	if len(itemIDs) == 0 {
-		return []string{"custom"}
+func selectItems(rule RuleSetSnapshot, resourceType string) []InspectionItem {
+	if len(rule.Items) > 0 {
+		var out []InspectionItem
+		for _, item := range rule.Items {
+			if item.ResourceType == "" || item.ResourceType == resourceType || item.ResourceType == "any" {
+				out = append(out, item)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
 	}
-	var out []string
-	for _, item := range itemIDs {
+	if len(rule.ItemIDs) == 0 {
+		return []InspectionItem{{ID: "custom", Executor: resourceType}}
+	}
+	var out []InspectionItem
+	for _, item := range rule.ItemIDs {
 		switch resourceType {
 		case "redis":
 			if item == "item_redis_ping" {
-				out = append(out, item)
+				out = append(out, InspectionItem{ID: item, Executor: "redis"})
 			}
 		case "database", "postgres", "postgresql":
 			if item == "item_sql_select" {
-				out = append(out, item)
+				out = append(out, InspectionItem{ID: item, Executor: "sql"})
 			}
 		case "http", "api":
 			if item == "item_http_health" {
-				out = append(out, item)
+				out = append(out, InspectionItem{ID: item, Executor: "http"})
 			}
 		default:
-			out = append(out, item)
+			out = append(out, InspectionItem{ID: item, Executor: resourceType})
 		}
 	}
 	if len(out) == 0 {
-		return []string{itemIDs[0]}
+		return []InspectionItem{{ID: rule.ItemIDs[0], Executor: resourceType}}
 	}
 	return out
 }

@@ -232,6 +232,27 @@ func (s *Server) taskSnapshots(ctx context.Context, environmentID, ruleSetID str
 	if err != nil {
 		return nil, nil, errors.New("rule set not found")
 	}
+	var itemIDs []string
+	if raw, ok := ruleSet["item_ids"].([]any); ok {
+		for _, item := range raw {
+			itemIDs = append(itemIDs, asString(item))
+		}
+	}
+	if len(itemIDs) > 0 {
+		rows, err := s.db.Query(ctx, `select id,name,item_type,resource_type,severity,executor,script,rule from inspection_items where id = any($1) and enabled=true`, itemIDs)
+		if err == nil {
+			defer rows.Close()
+			var items []map[string]any
+			for rows.Next() {
+				var id, name, itemType, resourceType, severity, executor string
+				var script, rule []byte
+				if scanErr := rows.Scan(&id, &name, &itemType, &resourceType, &severity, &executor, &script, &rule); scanErr == nil {
+					items = append(items, map[string]any{"id": id, "name": name, "item_type": itemType, "resource_type": resourceType, "severity": severity, "executor": executor, "script": jsonRaw(script), "rule": jsonRaw(rule)})
+				}
+			}
+			ruleSet["items"] = items
+		}
+	}
 	return map[string]any{"environment_id": environmentID, "resources": resources}, ruleSet, nil
 }
 

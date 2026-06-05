@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -29,18 +30,30 @@ type Result struct {
 	DurationMS int
 }
 
-func Run(ctx context.Context, resource Resource, itemID string) Result {
+type Item struct {
+	ID       string
+	Executor string
+	Script   map[string]any
+}
+
+func Run(ctx context.Context, resource Resource, item Item) Result {
 	start := time.Now()
 	status, output, errText := "success", "", ""
-	switch resource.ResourceType {
+	executor := item.Executor
+	if executor == "" {
+		executor = resource.ResourceType
+	}
+	switch executor {
 	case "redis":
 		output, errText = runRedis(ctx, resource)
-	case "database", "postgres", "postgresql":
+	case "sql", "database", "postgres", "postgresql":
 		output, errText = runSQL(ctx, resource)
 	case "http", "api":
-		output, errText = runHTTP(ctx, resource)
+		output, errText = runHTTP(ctx, resource, item.Script)
+	case "script", "shell":
+		output, errText = runShell(ctx, item.Script)
 	default:
-		output = fmt.Sprintf("resource %s skipped by worker; executor for %s is not implemented yet", resource.Name, resource.ResourceType)
+		output = fmt.Sprintf("resource %s skipped by worker; executor for %s is not implemented yet", resource.Name, executor)
 	}
 	if errText != "" {
 		status = "fail"
@@ -94,7 +107,7 @@ func runSQL(ctx context.Context, resource Resource) (string, string) {
 	return fmt.Sprintf("%d", one), ""
 }
 
-func runHTTP(ctx context.Context, resource Resource) (string, string) {
+func runHTTP(ctx context.Context, resource Resource, script map[string]any) (string, string) {
 	scheme := resource.Protocol
 	if scheme == "" {
 		scheme = "http"
@@ -110,6 +123,12 @@ func runHTTP(ctx context.Context, resource Resource) (string, string) {
 	if resource.Port > 0 {
 		url = fmt.Sprintf("%s://%s:%d", scheme, host, resource.Port)
 	}
+	if path, ok := script["path"].(string); ok && path != "" {
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		url += path
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err.Error()
@@ -123,4 +142,26 @@ func runHTTP(ctx context.Context, resource Resource) (string, string) {
 		return fmt.Sprintf("status=%d", resp.StatusCode), "server returned error status"
 	}
 	return fmt.Sprintf("status=%d", resp.StatusCode), ""
+}
+
+func runShell(ctx context.Context, script map[string]any) (string, string) {
+	command, _ := script["command"].(string)
+	if command == "" {
+		return "", "script.command is required"
+	}
+	timeout := 10 * time.Second
+	if seconds, ok := script["timeout_seconds"].(float64); ok && seconds > 0 {
+		timeout = time.Duration(seconds) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return string(out), "script timeout"
+	}
+	if err != nil {
+		return string(out), err.Error()
+	}
+	return string(out), ""
 }

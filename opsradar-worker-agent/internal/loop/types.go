@@ -38,11 +38,23 @@ type TargetRun struct {
 }
 
 type RuleSetSnapshot struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Code        string   `json:"code"`
-	Description string   `json:"description"`
-	ItemIDs     []string `json:"item_ids"`
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Code        string           `json:"code"`
+	Description string           `json:"description"`
+	ItemIDs     []string         `json:"item_ids"`
+	Items       []InspectionItem `json:"items"`
+}
+
+type InspectionItem struct {
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	ItemType     string         `json:"item_type"`
+	ResourceType string         `json:"resource_type"`
+	Severity     string         `json:"severity"`
+	Executor     string         `json:"executor"`
+	Script       map[string]any `json:"script"`
+	Rule         map[string]any `json:"rule"`
 }
 
 type StepResult struct {
