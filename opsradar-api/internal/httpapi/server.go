@@ -48,58 +48,59 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/me", s.auth(s.handleMe))
 	s.mux.HandleFunc("GET /api/bootstrap", s.auth(s.handleBootstrap))
 	s.mux.HandleFunc("GET /api/dashboard/ai-workbench", s.auth(s.handleAIWorkbench))
-	s.mux.HandleFunc("POST /api/ai/chat", s.auth(s.handleAIChat))
-	s.mux.HandleFunc("GET /api/resources", s.auth(s.handleListResources))
-	s.mux.HandleFunc("POST /api/resources", s.auth(s.handleCreateResource))
-	s.mux.HandleFunc("POST /api/resources/import", s.auth(s.handleImportResources))
-	s.mux.HandleFunc("POST /api/resources/{id}/credential", s.auth(s.handleUpsertResourceCredential))
+	s.mux.HandleFunc("POST /api/ai/chat", s.auth(s.permit("ai:chat", s.handleAIChat)))
+	s.mux.HandleFunc("GET /api/resources", s.auth(s.permit("resources:read", s.handleListResources)))
+	s.mux.HandleFunc("POST /api/resources", s.auth(s.permit("resources:create", s.handleCreateResource)))
+	s.mux.HandleFunc("POST /api/resources/import", s.auth(s.permit("resources:import", s.handleImportResources)))
+	s.mux.HandleFunc("POST /api/resources/{id}/credential", s.auth(s.permit("resources:credential", s.handleUpsertResourceCredential)))
 	s.mux.HandleFunc("GET /api/environments", s.auth(s.handleListEnvironments))
-	s.mux.HandleFunc("POST /api/environments", s.auth(s.handleCreateEnvironment))
-	s.mux.HandleFunc("POST /api/environments/{id}/resources", s.auth(s.handleBindEnvironmentResource))
+	s.mux.HandleFunc("POST /api/environments", s.auth(s.permit("resources:create", s.handleCreateEnvironment)))
+	s.mux.HandleFunc("POST /api/environments/{id}/resources", s.auth(s.permit("resources:update", s.handleBindEnvironmentResource)))
 	s.mux.HandleFunc("GET /api/inspection-items", s.auth(s.handleListInspectionItems))
-	s.mux.HandleFunc("POST /api/inspection-items", s.auth(s.handleCreateInspectionItem))
+	s.mux.HandleFunc("POST /api/inspection-items", s.auth(s.permit("rules:create", s.handleCreateInspectionItem)))
 	s.mux.HandleFunc("GET /api/rule-sets", s.auth(s.handleListRuleSets))
-	s.mux.HandleFunc("POST /api/rule-sets", s.auth(s.handleCreateRuleSet))
-	s.mux.HandleFunc("GET /api/tasks", s.auth(s.handleListTasks))
-	s.mux.HandleFunc("POST /api/tasks", s.auth(s.handleCreateTask))
+	s.mux.HandleFunc("POST /api/rule-sets", s.auth(s.permit("rules:create", s.handleCreateRuleSet)))
+	s.mux.HandleFunc("GET /api/tasks", s.auth(s.permit("tasks:read", s.handleListTasks)))
+	s.mux.HandleFunc("POST /api/tasks", s.auth(s.permit("tasks:create", s.handleCreateTask)))
 	s.mux.HandleFunc("GET /api/tasks/{id}", s.auth(s.handleGetTask))
-	s.mux.HandleFunc("POST /api/tasks/{id}/start", s.auth(s.handleStartTask))
-	s.mux.HandleFunc("POST /api/tasks/{id}/cancel", s.auth(s.handleCancelTask))
-	s.mux.HandleFunc("POST /api/tasks/{id}/rerun", s.auth(s.handleRerunTask))
+	s.mux.HandleFunc("POST /api/tasks/{id}/start", s.auth(s.permit("tasks:start", s.handleStartTask)))
+	s.mux.HandleFunc("POST /api/tasks/{id}/cancel", s.auth(s.permit("tasks:cancel", s.handleCancelTask)))
+	s.mux.HandleFunc("POST /api/tasks/{id}/rerun", s.auth(s.permit("tasks:create", s.handleRerunTask)))
 	s.mux.HandleFunc("GET /api/cron-plans", s.auth(s.handleListCronPlans))
-	s.mux.HandleFunc("POST /api/cron-plans", s.auth(s.handleCreateCronPlan))
-	s.mux.HandleFunc("GET /api/issues", s.auth(s.handleListIssues))
+	s.mux.HandleFunc("POST /api/cron-plans", s.auth(s.permit("tasks:create", s.handleCreateCronPlan)))
+	s.mux.HandleFunc("GET /api/issues", s.auth(s.permit("issues:read", s.handleListIssues)))
 	s.mux.HandleFunc("GET /api/issues/{id}", s.auth(s.handleGetIssue))
-	s.mux.HandleFunc("POST /api/issues/{id}/insight", s.auth(s.handleAnalyzeIssue))
-	s.mux.HandleFunc("POST /api/issues/{id}/retest", s.auth(s.handleRetestIssue))
-	s.mux.HandleFunc("POST /api/repair-tasks", s.auth(s.handleCreateRepairTask))
-	s.mux.HandleFunc("POST /api/repair-tasks/{id}/confirm", s.auth(s.handleConfirmRepairTask))
-	s.mux.HandleFunc("POST /api/repair-tasks/{id}/execute", s.auth(s.handleExecuteRepairTask))
-	s.mux.HandleFunc("GET /api/reports", s.auth(s.handleListReports))
+	s.mux.HandleFunc("POST /api/issues/{id}/insight", s.auth(s.permit("issues:analyze", s.handleAnalyzeIssue)))
+	s.mux.HandleFunc("POST /api/issues/{id}/retest", s.auth(s.permit("issues:retest", s.handleRetestIssue)))
+	s.mux.HandleFunc("POST /api/repair-tasks", s.auth(s.permit("repair:create", s.handleCreateRepairTask)))
+	s.mux.HandleFunc("POST /api/repair-tasks/{id}/confirm", s.auth(s.permit("repair:confirm", s.handleConfirmRepairTask)))
+	s.mux.HandleFunc("POST /api/repair-tasks/{id}/execute", s.auth(s.permit("repair:execute", s.handleExecuteRepairTask)))
+	s.mux.HandleFunc("GET /api/reports", s.auth(s.permit("reports:read", s.handleListReports)))
 	s.mux.HandleFunc("GET /api/reports/{task_id}", s.auth(s.handleGetReportByTask))
 	s.mux.HandleFunc("GET /api/reports/{task_id}/preview", s.auth(s.handlePreviewReport))
-	s.mux.HandleFunc("POST /api/reports/{task_id}/ai-diagnosis", s.auth(s.handleReportDiagnosis))
-	s.mux.HandleFunc("POST /api/reports/{task_id}/exports", s.auth(s.handleCreateReportExport))
-	s.mux.HandleFunc("GET /api/report-exports/{id}/download", s.auth(s.handleDownloadReportExport))
-	s.mux.HandleFunc("GET /api/ai/providers", s.auth(s.handleListAIProviders))
-	s.mux.HandleFunc("POST /api/ai/providers", s.auth(s.handleCreateAIProvider))
-	s.mux.HandleFunc("GET /api/ai/prompts", s.auth(s.handleListPrompts))
-	s.mux.HandleFunc("POST /api/ai/prompts", s.auth(s.handleCreatePrompt))
-	s.mux.HandleFunc("GET /api/notification-channels", s.auth(s.handleListNotificationChannels))
-	s.mux.HandleFunc("POST /api/notification-channels", s.auth(s.handleCreateNotificationChannel))
-	s.mux.HandleFunc("POST /api/notification-channels/{id}/test", s.auth(s.handleTestNotificationChannel))
-	s.mux.HandleFunc("GET /api/notification-deliveries", s.auth(s.handleListNotificationDeliveries))
-	s.mux.HandleFunc("GET /api/data-sources", s.auth(s.handleListDataSources))
-	s.mux.HandleFunc("POST /api/data-sources", s.auth(s.handleCreateDataSource))
-	s.mux.HandleFunc("POST /api/data-sources/{id}/test", s.auth(s.handleTestDataSource))
-	s.mux.HandleFunc("POST /api/integrations/jumpserver/config", s.auth(s.handleSaveJumpServerConfig))
-	s.mux.HandleFunc("GET /api/integrations/jumpserver/config", s.auth(s.handleListJumpServerConfigs))
-	s.mux.HandleFunc("POST /api/integrations/jumpserver/config/{id}/test", s.auth(s.handleTestJumpServerConfig))
-	s.mux.HandleFunc("POST /api/integrations/jumpserver/sync-jobs", s.auth(s.handleCreateJumpServerSyncJob))
-	s.mux.HandleFunc("GET /api/integrations/jumpserver/sync-jobs", s.auth(s.handleListJumpServerSyncJobs))
-	s.mux.HandleFunc("GET /api/users", s.auth(s.handleListUsers))
+	s.mux.HandleFunc("POST /api/reports/{task_id}/ai-diagnosis", s.auth(s.permit("reports:diagnose", s.handleReportDiagnosis)))
+	s.mux.HandleFunc("POST /api/reports/{task_id}/exports", s.auth(s.permit("reports:export", s.handleCreateReportExport)))
+	s.mux.HandleFunc("GET /api/report-exports/{id}/download", s.auth(s.permit("reports:export", s.handleDownloadReportExport)))
+	s.mux.HandleFunc("GET /api/ai/providers", s.auth(s.permit("settings:read", s.handleListAIProviders)))
+	s.mux.HandleFunc("POST /api/ai/providers", s.auth(s.permit("settings:update", s.handleCreateAIProvider)))
+	s.mux.HandleFunc("GET /api/ai/prompts", s.auth(s.permit("settings:read", s.handleListPrompts)))
+	s.mux.HandleFunc("POST /api/ai/prompts", s.auth(s.permit("settings:update", s.handleCreatePrompt)))
+	s.mux.HandleFunc("GET /api/notification-channels", s.auth(s.permit("settings:read", s.handleListNotificationChannels)))
+	s.mux.HandleFunc("POST /api/notification-channels", s.auth(s.permit("settings:update", s.handleCreateNotificationChannel)))
+	s.mux.HandleFunc("POST /api/notification-channels/{id}/test", s.auth(s.permit("settings:update", s.handleTestNotificationChannel)))
+	s.mux.HandleFunc("GET /api/notification-deliveries", s.auth(s.permit("audit:read", s.handleListNotificationDeliveries)))
+	s.mux.HandleFunc("GET /api/data-sources", s.auth(s.permit("settings:read", s.handleListDataSources)))
+	s.mux.HandleFunc("POST /api/data-sources", s.auth(s.permit("settings:update", s.handleCreateDataSource)))
+	s.mux.HandleFunc("POST /api/data-sources/{id}/test", s.auth(s.permit("settings:update", s.handleTestDataSource)))
+	s.mux.HandleFunc("POST /api/integrations/jumpserver/config", s.auth(s.permit("settings:update", s.handleSaveJumpServerConfig)))
+	s.mux.HandleFunc("GET /api/integrations/jumpserver/config", s.auth(s.permit("settings:read", s.handleListJumpServerConfigs)))
+	s.mux.HandleFunc("POST /api/integrations/jumpserver/config/{id}/test", s.auth(s.permit("settings:update", s.handleTestJumpServerConfig)))
+	s.mux.HandleFunc("POST /api/integrations/jumpserver/sync-jobs", s.auth(s.permit("resources:import", s.handleCreateJumpServerSyncJob)))
+	s.mux.HandleFunc("GET /api/integrations/jumpserver/sync-jobs", s.auth(s.permit("settings:read", s.handleListJumpServerSyncJobs)))
+	s.mux.HandleFunc("GET /api/users", s.auth(s.permit("users:read", s.handleListUsers)))
+	s.mux.HandleFunc("POST /api/users", s.auth(s.permit("users:create", s.handleCreateUser)))
 	s.mux.HandleFunc("GET /api/roles", s.auth(s.handleListRoles))
-	s.mux.HandleFunc("GET /api/audit-logs", s.auth(s.handleListAuditLogs))
+	s.mux.HandleFunc("GET /api/audit-logs", s.auth(s.permit("audit:read", s.handleListAuditLogs)))
 	s.mux.HandleFunc("GET /api/workers", s.auth(s.handleListWorkers))
 	s.mux.HandleFunc("POST /api/workers/heartbeat", s.workerAuth(s.handleWorkerHeartbeat))
 	s.mux.HandleFunc("GET /api/worker/next", s.workerAuth(s.handleWorkerNext))
@@ -894,6 +895,33 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 		user := PublicUser{ID: claims.UserID, Username: claims.Username, Role: claims.Role, Permissions: claims.Permissions}
 		next(w, r.WithContext(context.WithValue(r.Context(), userContextKey{}, user)))
 	}
+}
+
+func (s *Server) permit(permission string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := currentUser(r)
+		if !hasPermission(user.Permissions, permission) {
+			_ = s.audit(r.Context(), user.ID, user.Username, "auth.forbidden", "permission", permission, "failed", r.RemoteAddr, nil)
+			writeError(w, http.StatusForbidden, "permission denied: "+permission)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func hasPermission(permissions []string, required string) bool {
+	for _, permission := range permissions {
+		if permission == "*" || permission == required {
+			return true
+		}
+		if strings.HasSuffix(permission, ":*") {
+			prefix := strings.TrimSuffix(permission, "*")
+			if strings.HasPrefix(required, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Server) workerAuth(next http.HandlerFunc) http.HandlerFunc {

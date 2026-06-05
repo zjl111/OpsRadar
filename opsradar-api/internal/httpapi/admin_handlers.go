@@ -157,10 +157,60 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	writeRows(w, r, s.db, `select id,username,display_name,role,permissions,is_active,created_at from users order by created_at desc`, []string{"id", "username", "display_name", "role", "permissions", "is_active", "created_at"})
 }
 
+func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username    string   `json:"username"`
+		Password    string   `json:"password"`
+		DisplayName string   `json:"display_name"`
+		Role        string   `json:"role"`
+		Permissions []string `json:"permissions"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Username == "" || req.Password == "" {
+		writeError(w, http.StatusBadRequest, "username and password are required")
+		return
+	}
+	if req.Role == "" {
+		req.Role = "user"
+	}
+	if len(req.Permissions) == 0 {
+		req.Permissions = rolePermissions(req.Role)
+	}
+	hash, err := security.HashPassword(req.Password)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	body, _ := json.Marshal(req.Permissions)
+	id := security.NewID("usr")
+	_, err = s.db.Exec(r.Context(), `insert into users (id,username,password_hash,display_name,role,permissions,is_active) values ($1,$2,$3,$4,$5,$6,true)`, id, req.Username, hash, req.DisplayName, req.Role, body)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	u := currentUser(r)
+	_ = s.audit(r.Context(), u.ID, u.Username, "users.create", "user", id, "success", r.RemoteAddr, map[string]any{"username": req.Username, "role": req.Role})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
 func (s *Server) handleListRoles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": []map[string]any{
-		{"role": "admin", "permissions": []string{"*"}},
-		{"role": "operator", "permissions": []string{"resources:*", "tasks:*", "issues:*", "reports:*"}},
-		{"role": "user", "permissions": []string{"resources:read", "tasks:read", "issues:read", "reports:read"}},
+		{"role": "admin", "permissions": rolePermissions("admin")},
+		{"role": "operator", "permissions": rolePermissions("operator")},
+		{"role": "user", "permissions": rolePermissions("user")},
 	}})
+}
+
+func rolePermissions(role string) []string {
+	switch role {
+	case "admin":
+		return []string{"*"}
+	case "operator":
+		return []string{"resources:*", "rules:*", "tasks:*", "issues:*", "repair:*", "reports:*", "audit:read", "settings:read", "ai:chat"}
+	default:
+		return []string{"resources:read", "tasks:read", "issues:read", "reports:read", "ai:chat"}
+	}
 }
