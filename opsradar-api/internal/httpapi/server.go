@@ -56,8 +56,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/environments", s.auth(s.handleListEnvironments))
 	s.mux.HandleFunc("POST /api/environments", s.auth(s.permit("resources:create", s.handleCreateEnvironment)))
 	s.mux.HandleFunc("POST /api/environments/{id}/resources", s.auth(s.permit("resources:update", s.handleBindEnvironmentResource)))
+	s.mux.HandleFunc("GET /api/inspection-metrics", s.auth(s.handleListInspectionMetrics))
+	s.mux.HandleFunc("POST /api/inspection-metrics", s.auth(s.permit("rules:create", s.handleCreateInspectionMetric)))
 	s.mux.HandleFunc("GET /api/inspection-items", s.auth(s.handleListInspectionItems))
 	s.mux.HandleFunc("POST /api/inspection-items", s.auth(s.permit("rules:create", s.handleCreateInspectionItem)))
+	s.mux.HandleFunc("GET /api/custom-scripts", s.auth(s.handleListCustomScripts))
+	s.mux.HandleFunc("POST /api/custom-scripts", s.auth(s.permit("rules:create", s.handleCreateCustomScript)))
 	s.mux.HandleFunc("GET /api/rule-sets", s.auth(s.handleListRuleSets))
 	s.mux.HandleFunc("POST /api/rule-sets", s.auth(s.permit("rules:create", s.handleCreateRuleSet)))
 	s.mux.HandleFunc("GET /api/tasks", s.auth(s.permit("tasks:read", s.handleListTasks)))
@@ -412,6 +416,41 @@ func (s *Server) handleListInspectionItems(w http.ResponseWriter, r *http.Reques
 	writeRows(w, r, s.db, `select id,name,item_type,resource_type,severity,executor,script,rule,enabled,created_at from inspection_items order by created_at desc`, []string{"id", "name", "item_type", "resource_type", "severity", "executor", "script", "rule", "enabled", "created_at"})
 }
 
+func (s *Server) handleListInspectionMetrics(w http.ResponseWriter, r *http.Request) {
+	writeRows(w, r, s.db, `select id,name,category,resource_type,metric_type,unit,description,builtin,default_rule,enabled,created_at,updated_at from inspection_metrics order by builtin desc, created_at desc`, []string{"id", "name", "category", "resource_type", "metric_type", "unit", "description", "builtin", "default_rule", "enabled", "created_at", "updated_at"})
+}
+
+func (s *Server) handleCreateInspectionMetric(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name         string         `json:"name"`
+		Category     string         `json:"category"`
+		ResourceType string         `json:"resource_type"`
+		MetricType   string         `json:"metric_type"`
+		Unit         string         `json:"unit"`
+		Description  string         `json:"description"`
+		DefaultRule  map[string]any `json:"default_rule"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	rule, _ := json.Marshal(req.DefaultRule)
+	id := security.NewID("metric")
+	_, err := s.db.Exec(r.Context(), `insert into inspection_metrics (id,name,category,resource_type,metric_type,unit,description,builtin,default_rule,enabled) values ($1,$2,$3,$4,$5,$6,$7,false,$8,true)`,
+		id, req.Name, defaultString(req.Category, "custom"), req.ResourceType, defaultString(req.MetricType, "custom"), req.Unit, req.Description, rule)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	u := currentUser(r)
+	_ = s.audit(r.Context(), u.ID, u.Username, "inspection_metrics.create", "inspection_metric", id, "success", r.RemoteAddr, nil)
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
 func (s *Server) handleCreateInspectionItem(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name         string         `json:"name"`
@@ -442,6 +481,82 @@ func (s *Server) handleCreateInspectionItem(w http.ResponseWriter, r *http.Reque
 	u := currentUser(r)
 	_ = s.audit(r.Context(), u.ID, u.Username, "inspection_items.create", "inspection_item", id, "success", r.RemoteAddr, nil)
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
+func (s *Server) handleListCustomScripts(w http.ResponseWriter, r *http.Request) {
+	writeRows(w, r, s.db, `select id,name,script_type,resource_type,executor,content,params,rule,inspection_item_id,enabled,created_at,updated_at from custom_scripts order by created_at desc`, []string{"id", "name", "script_type", "resource_type", "executor", "content", "params", "rule", "inspection_item_id", "enabled", "created_at", "updated_at"})
+}
+
+func (s *Server) handleCreateCustomScript(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name         string         `json:"name"`
+		ScriptType   string         `json:"script_type"`
+		ResourceType string         `json:"resource_type"`
+		Executor     string         `json:"executor"`
+		Content      string         `json:"content"`
+		Params       map[string]any `json:"params"`
+		Rule         map[string]any `json:"rule"`
+		Severity     string         `json:"severity"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" || req.Content == "" {
+		writeError(w, http.StatusBadRequest, "name and content are required")
+		return
+	}
+	scriptType := defaultString(req.ScriptType, "shell")
+	executor := defaultString(req.Executor, scriptType)
+	script := scriptPayload(scriptType, req.Content, req.Params)
+	scriptRaw, _ := json.Marshal(script)
+	paramsRaw, _ := json.Marshal(req.Params)
+	ruleRaw, _ := json.Marshal(req.Rule)
+	itemID := security.NewID("item")
+	scriptID := security.NewID("script")
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback(r.Context())
+	_, err = tx.Exec(r.Context(), `insert into inspection_items (id,name,item_type,resource_type,severity,executor,script,rule,enabled) values ($1,$2,'custom_script',$3,$4,$5,$6,$7,true)`,
+		itemID, req.Name, req.ResourceType, defaultString(req.Severity, "medium"), executor, scriptRaw, ruleRaw)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	u := currentUser(r)
+	_, err = tx.Exec(r.Context(), `insert into custom_scripts (id,name,script_type,resource_type,executor,content,params,rule,inspection_item_id,created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		scriptID, req.Name, scriptType, req.ResourceType, executor, req.Content, paramsRaw, ruleRaw, itemID, nullText(u.ID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_ = s.audit(r.Context(), u.ID, u.Username, "custom_scripts.create", "custom_script", scriptID, "success", r.RemoteAddr, map[string]any{"inspection_item_id": itemID})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": scriptID, "inspection_item_id": itemID})
+}
+
+func scriptPayload(scriptType, content string, params map[string]any) map[string]any {
+	payload := map[string]any{}
+	for key, value := range params {
+		payload[key] = value
+	}
+	switch scriptType {
+	case "sql", "promql", "logql":
+		payload["query"] = content
+	case "redis":
+		payload["command"] = content
+	case "ansible", "ansible-runner":
+		payload["playbook"] = content
+	default:
+		payload["command"] = content
+	}
+	return payload
 }
 
 func (s *Server) handleListRuleSets(w http.ResponseWriter, r *http.Request) {

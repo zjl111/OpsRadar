@@ -61,6 +61,13 @@ on conflict (code) do nothing;
 insert into app_environments (id, application_id, name, code, env_type, health_score)
 values ('env_devops_prod', 'app_devops', 'devops-prod', 'devops-prod', 'prod', 100)
 on conflict (code) do nothing;
+insert into inspection_metrics (id, name, category, resource_type, metric_type, unit, description, builtin, default_rule, enabled)
+values
+('metric_http_health', 'HTTP 可用性', 'availability', 'http', 'http', '', '检查 HTTP 服务是否返回非 5xx 状态。', true, '{"operator":"status_lt","value":500}', true),
+('metric_redis_ping', 'Redis 可用性', 'availability', 'redis', 'redis', '', '检查 Redis PING 是否返回 PONG。', true, '{"operator":"eq","value":"PONG"}', true),
+('metric_sql_select', '数据库连通性', 'availability', 'database', 'sql', '', '通过 select 1 检查数据库连接。', true, '{"operator":"eq","value":"1"}', true),
+('metric_host_uname', '主机基础信息', 'availability', 'host', 'ssh', '', '通过 SSH 执行 uname -a 获取主机基础信息。', true, '{"operator":"not_empty"}', true)
+on conflict (id) do nothing;
 insert into inspection_items (id, name, item_type, resource_type, severity, executor, script, rule, enabled)
 values
 ('item_http_health', 'HTTP 健康检查', 'availability', 'http', 'high', 'http', '{"method":"GET","path":"/"}', '{"operator":"status_lt","value":500}', true),
@@ -192,6 +199,20 @@ var schema = []string{
 		finished_at timestamptz,
 		created_at timestamptz not null default now()
 	)`,
+	`create table if not exists inspection_metrics (
+		id text primary key,
+		name text not null,
+		category text not null default 'custom',
+		resource_type text not null default '',
+		metric_type text not null default 'custom',
+		unit text not null default '',
+		description text not null default '',
+		builtin boolean not null default false,
+		default_rule jsonb not null default '{}'::jsonb,
+		enabled boolean not null default true,
+		created_at timestamptz not null default now(),
+		updated_at timestamptz not null default now()
+	)`,
 	`create table if not exists inspection_items (
 		id text primary key,
 		name text not null,
@@ -203,6 +224,21 @@ var schema = []string{
 		rule jsonb not null default '{}'::jsonb,
 		enabled boolean not null default true,
 		created_at timestamptz not null default now()
+	)`,
+	`create table if not exists custom_scripts (
+		id text primary key,
+		name text not null,
+		script_type text not null default 'shell',
+		resource_type text not null default '',
+		executor text not null,
+		content text not null default '',
+		params jsonb not null default '{}'::jsonb,
+		rule jsonb not null default '{}'::jsonb,
+		inspection_item_id text references inspection_items(id),
+		enabled boolean not null default true,
+		created_by text references users(id),
+		created_at timestamptz not null default now(),
+		updated_at timestamptz not null default now()
 	)`,
 	`create table if not exists rule_sets (
 		id text primary key,
