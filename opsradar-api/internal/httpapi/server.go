@@ -92,6 +92,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/data-sources", s.auth(s.permit("settings:read", s.handleListDataSources)))
 	s.mux.HandleFunc("POST /api/data-sources", s.auth(s.permit("settings:update", s.handleCreateDataSource)))
 	s.mux.HandleFunc("POST /api/data-sources/{id}/test", s.auth(s.permit("settings:update", s.handleTestDataSource)))
+	s.mux.HandleFunc("POST /api/data-sources/{id}/query", s.auth(s.permit("settings:read", s.handleQueryDataSource)))
 	s.mux.HandleFunc("POST /api/integrations/jumpserver/config", s.auth(s.permit("settings:update", s.handleSaveJumpServerConfig)))
 	s.mux.HandleFunc("GET /api/integrations/jumpserver/config", s.auth(s.permit("settings:read", s.handleListJumpServerConfigs)))
 	s.mux.HandleFunc("POST /api/integrations/jumpserver/config/{id}/test", s.auth(s.permit("settings:update", s.handleTestJumpServerConfig)))
