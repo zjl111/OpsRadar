@@ -34,6 +34,7 @@ const prompt = ref({ name: '问题分析', scene: 'issue_analysis', content: '�
 const cronPlan = ref({ name: '每日默认巡检', interval_seconds: 86400 })
 const notification = ref({ name: 'Feishu', channel_type: 'webhook', endpoint: '', secret: '' })
 const dataSource = ref({ name: 'Prometheus', source_type: 'prometheus', endpoint: 'http://127.0.0.1:9090', secret: '' })
+const newUser = ref({ username: '', password: '', role: 'user', display_name: '' })
 const operationMessage = ref('')
 
 const stats = computed(() => bootstrap.value.stats || {})
@@ -148,6 +149,15 @@ async function saveDataSource() {
     body: JSON.stringify(dataSource.value)
   })
   operationMessage.value = `数据源已保存：${result.id}`
+}
+
+async function createUser() {
+  const result = await api<{ id: string }>('/api/users', {
+    method: 'POST',
+    body: JSON.stringify(newUser.value)
+  })
+  operationMessage.value = `用户已创建：${result.id}`
+  newUser.value = { username: '', password: '', role: 'user', display_name: '' }
 }
 
 async function createRepairForIssue(issueId: string) {
@@ -389,6 +399,20 @@ onMounted(async () => {
             <input v-model="cronPlan.name" placeholder="计划名称" />
             <input v-model.number="cronPlan.interval_seconds" type="number" placeholder="间隔秒数" />
             <button class="primary" @click="createCronPlan">创建计划</button>
+          </div>
+        </article>
+        <article class="panel">
+          <h2>用户角色</h2>
+          <div class="settings-form">
+            <input v-model="newUser.username" placeholder="用户名" />
+            <input v-model="newUser.display_name" placeholder="显示名" />
+            <input v-model="newUser.password" type="password" placeholder="密码" />
+            <select v-model="newUser.role">
+              <option value="user">user</option>
+              <option value="operator">operator</option>
+              <option value="admin">admin</option>
+            </select>
+            <button class="primary" @click="createUser">创建用户</button>
           </div>
         </article>
         <article class="panel">
