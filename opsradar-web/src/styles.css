@@ -13,7 +13,8 @@ body {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -32,11 +33,17 @@ button.primary {
   color: #ffffff;
 }
 
-input {
+input,
+textarea {
   border: 1px solid #d3dbe7;
   border-radius: 8px;
   padding: 10px 12px;
   min-width: 0;
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
 }
 
 .login-shell {
@@ -150,7 +157,16 @@ input {
 
 .top-actions {
   display: flex;
+  align-items: center;
   gap: 10px;
+}
+
+.notice {
+  color: #2b6740;
+  background: #edf8f0;
+  border: 1px solid #cfe8d5;
+  border-radius: 8px;
+  padding: 8px 10px;
 }
 
 .grid {
@@ -191,6 +207,21 @@ input {
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 18px;
+}
+
+.settings-form {
+  display: grid;
+  gap: 10px;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.row-actions button {
+  padding: 6px 9px;
 }
 
 .stats-panel {

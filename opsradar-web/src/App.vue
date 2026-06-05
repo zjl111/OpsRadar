@@ -28,6 +28,11 @@ const reports = ref<Report[]>([])
 const auditLogs = ref<any[]>([])
 const workers = ref<any[]>([])
 const newResource = ref({ name: 'local redis', resource_type: 'redis', host: '127.0.0.1', port: 6379, protocol: 'redis' })
+const importCsv = ref('name,resource_type,host,port,protocol,tags\nimport redis,redis,127.0.0.1,6379,redis,import')
+const jumpserver = ref({ name: 'JumpServer', base_url: 'http://127.0.0.1:8081', token: '' })
+const prompt = ref({ name: '问题分析', scene: 'issue_analysis', content: '基于巡检输出、任务日志和证据链分析根因，并给出修复与复测步骤。' })
+const cronPlan = ref({ name: '每日默认巡检', interval_seconds: 86400 })
+const operationMessage = ref('')
 
 const stats = computed(() => bootstrap.value.stats || {})
 const latestTasks = computed(() => tasks.value.slice(0, 6))
@@ -75,6 +80,15 @@ async function createResource() {
   await refreshAll()
 }
 
+async function importResources() {
+  const result = await api<any>('/api/resources/import', {
+    method: 'POST',
+    body: JSON.stringify({ source: 'csv', csv: importCsv.value })
+  })
+  operationMessage.value = `导入完成：成功 ${result.success}，失败 ${result.failed}`
+  await refreshAll()
+}
+
 async function createAndStartTask() {
   const created = await api<{ id: string }>('/api/tasks', {
     method: 'POST',
@@ -83,6 +97,39 @@ async function createAndStartTask() {
   await api(`/api/tasks/${created.id}/start`, { method: 'POST' })
   active.value = 'tasks'
   await refreshAll()
+}
+
+async function exportReport(taskId: string, format: 'html' | 'pdf' | 'docx') {
+  const result = await api<{ download_url: string; file_name: string }>(`/api/reports/${taskId}/exports`, {
+    method: 'POST',
+    body: JSON.stringify({ format })
+  })
+  operationMessage.value = `导出完成：${result.file_name}`
+  window.open(result.download_url, '_blank')
+}
+
+async function saveJumpServer() {
+  const result = await api<{ id: string }>('/api/integrations/jumpserver/config', {
+    method: 'POST',
+    body: JSON.stringify(jumpserver.value)
+  })
+  operationMessage.value = `JumpServer 配置已保存：${result.id}`
+}
+
+async function savePrompt() {
+  const result = await api<{ id: string; version: number }>('/api/ai/prompts', {
+    method: 'POST',
+    body: JSON.stringify(prompt.value)
+  })
+  operationMessage.value = `Prompt 已保存：v${result.version}`
+}
+
+async function createCronPlan() {
+  const result = await api<{ id: string }>('/api/cron-plans', {
+    method: 'POST',
+    body: JSON.stringify({ ...cronPlan.value, rule_set_id: 'ruleset_default' })
+  })
+  operationMessage.value = `周期计划已创建：${result.id}`
 }
 
 function logout() {
@@ -142,6 +189,7 @@ onMounted(async () => {
           <p>PostgreSQL + Redis + Go Worker 控制面</p>
         </div>
         <div class="top-actions">
+          <span v-if="operationMessage" class="notice">{{ operationMessage }}</span>
           <button @click="refreshAll">刷新</button>
           <button class="primary" @click="createAndStartTask">开始巡检</button>
         </div>
@@ -190,6 +238,13 @@ onMounted(async () => {
           <button class="primary" @click="createResource">纳管资源</button>
         </article>
         <article class="panel">
+          <h2>批量导入</h2>
+          <textarea v-model="importCsv" rows="5"></textarea>
+          <div class="quick-actions">
+            <button class="primary" @click="importResources">导入 CSV</button>
+          </div>
+        </article>
+        <article class="panel">
           <h2>资源中心</h2>
           <table>
             <thead><tr><th>名称</th><th>类型</th><th>地址</th><th>状态</th></tr></thead>
@@ -233,10 +288,15 @@ onMounted(async () => {
         <article class="panel">
           <h2>报告归档</h2>
           <table>
-            <thead><tr><th>报告</th><th>健康分</th><th>状态</th><th>时间</th></tr></thead>
+            <thead><tr><th>报告</th><th>健康分</th><th>状态</th><th>时间</th><th>导出</th></tr></thead>
             <tbody>
               <tr v-for="report in reports" :key="report.id">
                 <td>{{ report.name }}</td><td>{{ report.health_score }}</td><td>{{ report.status }}</td><td>{{ new Date(report.created_at).toLocaleString() }}</td>
+                <td class="row-actions">
+                  <button @click="exportReport(report.task_id, 'html')">HTML</button>
+                  <button @click="exportReport(report.task_id, 'pdf')">PDF</button>
+                  <button @click="exportReport(report.task_id, 'docx')">DOCX</button>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -267,8 +327,30 @@ onMounted(async () => {
           </ul>
         </article>
         <article class="panel">
-          <h2>系统配置</h2>
-          <p>模型 Provider、通知渠道、数据源、知识库和站点设置将在此集中维护。</p>
+          <h2>JumpServer</h2>
+          <div class="settings-form">
+            <input v-model="jumpserver.name" placeholder="名称" />
+            <input v-model="jumpserver.base_url" placeholder="地址" />
+            <input v-model="jumpserver.token" type="password" placeholder="Token" />
+            <button class="primary" @click="saveJumpServer">保存配置</button>
+          </div>
+        </article>
+        <article class="panel">
+          <h2>Prompt 管理</h2>
+          <div class="settings-form">
+            <input v-model="prompt.name" placeholder="名称" />
+            <input v-model="prompt.scene" placeholder="场景" />
+            <textarea v-model="prompt.content" rows="5"></textarea>
+            <button class="primary" @click="savePrompt">保存 Prompt</button>
+          </div>
+        </article>
+        <article class="panel">
+          <h2>周期计划</h2>
+          <div class="settings-form">
+            <input v-model="cronPlan.name" placeholder="计划名称" />
+            <input v-model.number="cronPlan.interval_seconds" type="number" placeholder="间隔秒数" />
+            <button class="primary" @click="createCronPlan">创建计划</button>
+          </div>
         </article>
       </section>
     </section>
