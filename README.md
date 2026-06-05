@@ -1,11 +1,11 @@
 # OpsRadar
 
-OpsRadar 是一个 Go + Vue 的 AI 智能巡检与问题闭环平台。v1 按设计文档落地“中心控制面 + 分布式 Worker Agent”架构，覆盖资源纳管、任务创建/启动、Worker 心跳与拉取、Redis/HTTP/SQL 基础巡检、步骤结果回写、问题生成、HTML 报告、AI 工作台数据和审计日志。
+OpsRadar 是一个 Go + Vue 的 AI 智能巡检与问题闭环平台。v1 按设计文档落地“中心控制面 + 分布式 Worker Agent”架构，覆盖资源纳管、任务创建/启动、Worker 心跳与拉取、Redis/HTTP/SQL/SSH/Ansible 基础巡检、步骤结果回写、问题生成、修复闭环、HTML/PDF/DOCX 报告、AI 工作台数据和审计日志。
 
 ## 架构
 
 - `opsradar-api`：Go 控制面，提供 REST API、JWT/RBAC、资源、环境、规则集、任务、问题、报告、审计、AI 工作台和 Worker Gateway。
-- `opsradar-worker-agent`：Go 执行面，主动连接 API，定时心跳，轮询任务，执行基础巡检并回写结果。
+- `opsradar-worker-agent`：Go 执行面，主动连接 API，定时心跳，轮询任务，执行基础巡检、受控修复和 Ansible Runner playbook，并回写结果。
 - `opsradar-web`：Vue 3 + TypeScript + Vite 控制台。
 - PostgreSQL：事实数据源。
 - Redis：协调、Worker 心跳和临时状态。

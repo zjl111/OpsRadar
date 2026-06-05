@@ -55,6 +55,8 @@ func Run(ctx context.Context, resource Resource, item Item) Result {
 		output, errText = runShell(ctx, item.Script)
 	case "ssh", "host":
 		output, errText = runSSH(ctx, resource, item.Script)
+	case "ansible", "ansible-runner":
+		output, errText = runAnsibleRunner(ctx, item.Script)
 	default:
 		output = fmt.Sprintf("resource %s skipped by worker; executor for %s is not implemented yet", resource.Name, executor)
 	}
@@ -231,4 +233,33 @@ func runSSH(ctx context.Context, resource Resource, script map[string]any) (stri
 	case <-time.After(timeout):
 		return "", "ssh command timeout"
 	}
+}
+
+func runAnsibleRunner(ctx context.Context, script map[string]any) (string, string) {
+	privateDataDir, _ := script["private_data_dir"].(string)
+	if privateDataDir == "" {
+		return "", "ansible private_data_dir is required"
+	}
+	timeout := 60 * time.Second
+	if seconds, ok := script["timeout_seconds"].(float64); ok && seconds > 0 {
+		timeout = time.Duration(seconds) * time.Second
+	}
+	args := []string{"run", privateDataDir}
+	if ident, ok := script["ident"].(string); ok && ident != "" {
+		args = append(args, "--ident", ident)
+	}
+	if playbook, ok := script["playbook"].(string); ok && playbook != "" {
+		args = append(args, "-p", playbook)
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ansible-runner", args...)
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return string(out), "ansible-runner timeout"
+	}
+	if err != nil {
+		return string(out), err.Error()
+	}
+	return string(out), ""
 }
