@@ -41,6 +41,7 @@ func main() {
 	defer redisClient.Close()
 
 	handler := httpapi.NewServer(cfg, pool, redisClient)
+	go handler.StartScheduler(ctx)
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           handler,

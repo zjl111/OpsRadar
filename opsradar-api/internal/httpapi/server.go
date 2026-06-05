@@ -25,7 +25,7 @@ type Server struct {
 
 type userContextKey struct{}
 
-func NewServer(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Client) http.Handler {
+func NewServer(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Client) *Server {
 	s := &Server{cfg: cfg, db: pool, redis: redisClient, mux: http.NewServeMux()}
 	s.routes()
 	return s
@@ -63,19 +63,47 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/tasks/{id}/start", s.auth(s.handleStartTask))
 	s.mux.HandleFunc("POST /api/tasks/{id}/cancel", s.auth(s.handleCancelTask))
 	s.mux.HandleFunc("POST /api/tasks/{id}/rerun", s.auth(s.handleRerunTask))
+	s.mux.HandleFunc("GET /api/cron-plans", s.auth(s.handleListCronPlans))
+	s.mux.HandleFunc("POST /api/cron-plans", s.auth(s.handleCreateCronPlan))
 	s.mux.HandleFunc("GET /api/issues", s.auth(s.handleListIssues))
 	s.mux.HandleFunc("GET /api/issues/{id}", s.auth(s.handleGetIssue))
 	s.mux.HandleFunc("POST /api/issues/{id}/insight", s.auth(s.handleAnalyzeIssue))
+	s.mux.HandleFunc("POST /api/issues/{id}/retest", s.auth(s.handleRetestIssue))
+	s.mux.HandleFunc("POST /api/repair-tasks", s.auth(s.handleCreateRepairTask))
+	s.mux.HandleFunc("POST /api/repair-tasks/{id}/confirm", s.auth(s.handleConfirmRepairTask))
+	s.mux.HandleFunc("POST /api/repair-tasks/{id}/execute", s.auth(s.handleExecuteRepairTask))
 	s.mux.HandleFunc("GET /api/reports", s.auth(s.handleListReports))
 	s.mux.HandleFunc("GET /api/reports/{task_id}", s.auth(s.handleGetReportByTask))
 	s.mux.HandleFunc("GET /api/reports/{task_id}/preview", s.auth(s.handlePreviewReport))
 	s.mux.HandleFunc("POST /api/reports/{task_id}/ai-diagnosis", s.auth(s.handleReportDiagnosis))
+	s.mux.HandleFunc("GET /api/ai/providers", s.auth(s.handleListAIProviders))
+	s.mux.HandleFunc("POST /api/ai/providers", s.auth(s.handleCreateAIProvider))
+	s.mux.HandleFunc("GET /api/users", s.auth(s.handleListUsers))
+	s.mux.HandleFunc("GET /api/roles", s.auth(s.handleListRoles))
 	s.mux.HandleFunc("GET /api/audit-logs", s.auth(s.handleListAuditLogs))
 	s.mux.HandleFunc("GET /api/workers", s.auth(s.handleListWorkers))
 	s.mux.HandleFunc("POST /api/workers/heartbeat", s.workerAuth(s.handleWorkerHeartbeat))
 	s.mux.HandleFunc("GET /api/worker/next", s.workerAuth(s.handleWorkerNext))
 	s.mux.HandleFunc("POST /api/worker/step-result", s.workerAuth(s.handleWorkerStepResult))
 	s.mux.HandleFunc("POST /api/worker/task-complete", s.workerAuth(s.handleWorkerTaskComplete))
+}
+
+func (s *Server) StartScheduler(ctx context.Context) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if ok, err := s.redis.SetNX(ctx, "scheduler:cron_plans", s.cfg.HTTPAddr, 12*time.Second).Result(); err != nil || !ok {
+				continue
+			}
+			if err := s.runDueCronPlans(ctx); err != nil {
+				fmt.Printf("scheduler error: %v\n", err)
+			}
+		}
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

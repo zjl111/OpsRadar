@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -302,6 +303,61 @@ func (s *Server) generateReport(ctx context.Context, taskID string) error {
 	return err
 }
 
+func (s *Server) createTaskFromPlan(ctx context.Context, planID, name, environmentID, ruleSetID string, creator any) (string, error) {
+	scope, rule, err := s.taskSnapshots(ctx, environmentID, ruleSetID)
+	if err != nil {
+		return "", err
+	}
+	scopeJSON, _ := json.Marshal(scope)
+	ruleJSON, _ := json.Marshal(rule)
+	id := security.NewID("task")
+	_, err = s.db.Exec(ctx, `insert into inspection_tasks (id,name,task_type,status,environment_id,rule_set_id,scope_snapshot,rule_snapshot,report_policy,ai_policy,created_by) values ($1,$2,'cron','pending',$3,$4,$5,$6,'{"html":true}'::jsonb,'{"diagnosis":true}'::jsonb,$7)`,
+		id, name, nullText(environmentID), ruleSetID, scopeJSON, ruleJSON, creator)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func (s *Server) runDueCronPlans(ctx context.Context) error {
+	rows, err := s.db.Query(ctx, `select id,name,environment_id,rule_set_id,interval_seconds from cron_plans where enabled=true and next_run_at <= now() order by next_run_at limit 20`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type plan struct {
+		id, name                 string
+		environmentID, ruleSetID sql.NullString
+		interval                 int
+	}
+	var plans []plan
+	for rows.Next() {
+		var p plan
+		if err := rows.Scan(&p.id, &p.name, &p.environmentID, &p.ruleSetID, &p.interval); err != nil {
+			return err
+		}
+		plans = append(plans, p)
+	}
+	for _, p := range plans {
+		envID := nullableString(p.environmentID)
+		ruleSetID := defaultString(nullableString(p.ruleSetID), "ruleset_default")
+		taskID, err := s.createTaskFromPlan(ctx, p.id, p.name+" "+time.Now().Format("2006-01-02 15:04"), envID, ruleSetID, nil)
+		if err != nil {
+			continue
+		}
+		if err := s.materializeTargets(ctx, taskID); err == nil {
+			_, _ = s.db.Exec(ctx, `update inspection_tasks set status='queued', started_at=now(), updated_at=now() where id=$1`, taskID)
+			_ = s.writeTaskLog(ctx, taskID, "", "info", "周期计划自动生成任务并进入队列")
+		}
+		nextInterval := p.interval
+		if nextInterval < 60 {
+			nextInterval = 60
+		}
+		_, _ = s.db.Exec(ctx, `update cron_plans set next_run_at=now()+($1 || ' seconds')::interval where id=$2`, nextInterval, p.id)
+	}
+	return rows.Err()
+}
+
 func (s *Server) writeReportForTask(w http.ResponseWriter, r *http.Request, preview bool) {
 	taskID := r.PathValue("task_id")
 	report, err := queryOne(r.Context(), s.db, `select id,task_id,name,format,status,health_score,content_html,file_path,ai_diagnosis,created_at from inspection_reports where task_id=$1 order by created_at desc limit 1`, []string{"id", "task_id", "name", "format", "status", "health_score", "content_html", "file_path", "ai_diagnosis", "created_at"}, taskID)
@@ -333,6 +389,13 @@ func nullable(value sql.NullString) any {
 		return value.String
 	}
 	return nil
+}
+
+func nullableString(value sql.NullString) string {
+	if value.Valid {
+		return value.String
+	}
+	return ""
 }
 
 var sensitivePatterns = []*regexp.Regexp{
