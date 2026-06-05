@@ -238,10 +238,16 @@ var schema = []string{
 		resource_snapshot jsonb not null default '{}'::jsonb,
 		status text not null default 'pending',
 		worker_id text not null default '',
+		lease_until timestamptz,
+		attempt_count integer not null default 0,
+		last_error text not null default '',
 		started_at timestamptz,
 		finished_at timestamptz,
 		created_at timestamptz not null default now()
 	)`,
+	`alter table target_runs add column if not exists lease_until timestamptz`,
+	`alter table target_runs add column if not exists attempt_count integer not null default 0`,
+	`alter table target_runs add column if not exists last_error text not null default ''`,
 	`create table if not exists step_runs (
 		id text primary key,
 		target_run_id text not null references target_runs(id) on delete cascade,

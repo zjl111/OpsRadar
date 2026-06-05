@@ -63,6 +63,11 @@ func (c *Client) TaskComplete(ctx context.Context, taskID, status string, summar
 	return c.doJSON(ctx, http.MethodPost, "/api/worker/task-complete", map[string]any{"task_id": taskID, "status": status, "summary": summary}, &out)
 }
 
+func (c *Client) RenewTaskLease(ctx context.Context, taskID string, seconds int) error {
+	var out map[string]any
+	return c.doJSON(ctx, http.MethodPost, "/api/worker/task-lease", map[string]any{"task_id": taskID, "worker_id": c.cfg.ID, "seconds": seconds}, &out)
+}
+
 func (c *Client) doJSON(ctx context.Context, method, path string, body any, out any) error {
 	var reader *bytes.Reader
 	if body == nil {

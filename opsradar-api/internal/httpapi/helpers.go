@@ -353,8 +353,46 @@ func (s *Server) runDueCronPlans(ctx context.Context) error {
 		if nextInterval < 60 {
 			nextInterval = 60
 		}
-		_, _ = s.db.Exec(ctx, `update cron_plans set next_run_at=now()+($1 || ' seconds')::interval where id=$2`, nextInterval, p.id)
+		_, _ = s.db.Exec(ctx, `update cron_plans set next_run_at=now()+make_interval(secs => $1) where id=$2`, nextInterval, p.id)
 	}
+	return rows.Err()
+}
+
+func (s *Server) recoverExpiredLeases(ctx context.Context) error {
+	rows, err := s.db.Query(ctx, `
+select distinct task_id
+from target_runs
+where status='running'
+  and lease_until is not null
+  and lease_until < now()
+  and attempt_count < 3
+limit 50`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var taskIDs []string
+	for rows.Next() {
+		var taskID string
+		if err := rows.Scan(&taskID); err != nil {
+			return err
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	for _, taskID := range taskIDs {
+		_, _ = s.db.Exec(ctx, `
+update target_runs
+set status='pending', worker_id='', lease_until=null, last_error='lease expired'
+where task_id=$1 and status='running' and lease_until < now() and attempt_count < 3`, taskID)
+		_, _ = s.db.Exec(ctx, `update inspection_tasks set status='queued', updated_at=now() where id=$1 and status='running'`, taskID)
+		_ = s.writeTaskLog(ctx, taskID, "", "warn", "Worker 租约过期，任务已重新入队")
+	}
+	_, _ = s.db.Exec(ctx, `
+update inspection_tasks
+set status='failed', finished_at=now(), updated_at=now(), summary=jsonb_set(coalesce(summary,'{}'::jsonb), '{reason}', '"lease expired too many times"')
+where id in (
+  select distinct task_id from target_runs where status='running' and lease_until < now() and attempt_count >= 3
+)`)
 	return rows.Err()
 }
 

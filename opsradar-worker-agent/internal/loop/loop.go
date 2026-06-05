@@ -60,6 +60,10 @@ func (r *Runner) Run(ctx context.Context) error {
 
 func (r *Runner) executeTask(ctx context.Context, task Task) {
 	log.Printf("executing task %s %s", task.ID, task.Name)
+	leaseCtx, stopLease := context.WithCancel(ctx)
+	defer stopLease()
+	go r.renewLease(leaseCtx, task.ID)
+
 	success, fail := 0, 0
 	targets := task.Targets
 	if len(targets) == 0 {
@@ -114,6 +118,21 @@ func (r *Runner) executeTask(ctx context.Context, task Task) {
 	}
 	if err := r.client.TaskComplete(ctx, task.ID, status, map[string]any{"success": success, "fail": fail}); err != nil {
 		log.Printf("complete task failed: %v", err)
+	}
+}
+
+func (r *Runner) renewLease(ctx context.Context, taskID string) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := r.client.RenewTaskLease(ctx, taskID, 90); err != nil {
+				log.Printf("renew lease failed for %s: %v", taskID, err)
+			}
+		}
 	}
 }
 

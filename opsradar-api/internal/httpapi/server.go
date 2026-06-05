@@ -96,6 +96,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/workers/heartbeat", s.workerAuth(s.handleWorkerHeartbeat))
 	s.mux.HandleFunc("GET /api/worker/next", s.workerAuth(s.handleWorkerNext))
 	s.mux.HandleFunc("GET /api/worker/resources/{id}/credential", s.workerAuth(s.handleWorkerResourceCredential))
+	s.mux.HandleFunc("POST /api/worker/task-lease", s.workerAuth(s.handleWorkerTaskLease))
 	s.mux.HandleFunc("POST /api/worker/step-result", s.workerAuth(s.handleWorkerStepResult))
 	s.mux.HandleFunc("POST /api/worker/task-complete", s.workerAuth(s.handleWorkerTaskComplete))
 }
@@ -113,6 +114,9 @@ func (s *Server) StartScheduler(ctx context.Context) {
 			}
 			if err := s.runDueCronPlans(ctx); err != nil {
 				fmt.Printf("scheduler error: %v\n", err)
+			}
+			if err := s.recoverExpiredLeases(ctx); err != nil {
+				fmt.Printf("lease recovery error: %v\n", err)
 			}
 		}
 	}
@@ -656,7 +660,7 @@ func (s *Server) handleWorkerNext(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	_, _ = tx.Exec(r.Context(), `update target_runs set status='running', worker_id=$1, started_at=coalesce(started_at,now()) where task_id=$2 and status='pending'`, workerID, taskID)
+	_, _ = tx.Exec(r.Context(), `update target_runs set status='running', worker_id=$1, lease_until=now()+interval '90 seconds', attempt_count=attempt_count+1, started_at=coalesce(started_at,now()) where task_id=$2 and status='pending'`, workerID, taskID)
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -680,6 +684,31 @@ func (s *Server) handleWorkerResourceCredential(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"configured": true, "credential_type": typ, "username": username, "secret": secret})
+}
+
+func (s *Server) handleWorkerTaskLease(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TaskID   string `json:"task_id"`
+		WorkerID string `json:"worker_id"`
+		Seconds  int    `json:"seconds"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.TaskID == "" || req.WorkerID == "" {
+		writeError(w, http.StatusBadRequest, "task_id and worker_id are required")
+		return
+	}
+	if req.Seconds < 30 {
+		req.Seconds = 90
+	}
+	_, err := s.db.Exec(r.Context(), `update target_runs set lease_until=now()+make_interval(secs => $1) where task_id=$2 and worker_id=$3 and status='running'`, req.Seconds, req.TaskID, req.WorkerID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task_id": req.TaskID, "lease_seconds": req.Seconds})
 }
 
 func (s *Server) handleWorkerStepResult(w http.ResponseWriter, r *http.Request) {
