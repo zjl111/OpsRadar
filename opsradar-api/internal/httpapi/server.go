@@ -95,6 +95,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/workers", s.auth(s.handleListWorkers))
 	s.mux.HandleFunc("POST /api/workers/heartbeat", s.workerAuth(s.handleWorkerHeartbeat))
 	s.mux.HandleFunc("GET /api/worker/next", s.workerAuth(s.handleWorkerNext))
+	s.mux.HandleFunc("GET /api/worker/resources/{id}/credential", s.workerAuth(s.handleWorkerResourceCredential))
 	s.mux.HandleFunc("POST /api/worker/step-result", s.workerAuth(s.handleWorkerStepResult))
 	s.mux.HandleFunc("POST /api/worker/task-complete", s.workerAuth(s.handleWorkerTaskComplete))
 }
@@ -663,6 +664,22 @@ func (s *Server) handleWorkerNext(w http.ResponseWriter, r *http.Request) {
 	targets, _ := queryMany(r.Context(), s.db, `select id,resource_id,resource_snapshot from target_runs where task_id=$1 order by created_at`, []string{"id", "resource_id", "resource_snapshot"}, taskID)
 	_ = s.writeTaskLog(r.Context(), taskID, "", "info", "Worker "+workerID+" 已领取任务")
 	writeJSON(w, http.StatusOK, map[string]any{"task": map[string]any{"id": taskID, "name": name, "scope_snapshot": jsonRaw(scope), "rule_snapshot": jsonRaw(rule), "targets": targets}})
+}
+
+func (s *Server) handleWorkerResourceCredential(w http.ResponseWriter, r *http.Request) {
+	resourceID := r.PathValue("id")
+	var typ, username, cipher string
+	err := s.db.QueryRow(r.Context(), `select credential_type,username,secret_cipher from resource_credentials where resource_id=$1 and configured=true order by updated_at desc limit 1`, resourceID).Scan(&typ, &username, &cipher)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"configured": false})
+		return
+	}
+	secret, err := security.DecryptSecret(s.cfg.JWTSecret, cipher)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "credential decrypt failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"configured": true, "credential_type": typ, "username": username, "secret": secret})
 }
 
 func (s *Server) handleWorkerStepResult(w http.ResponseWriter, r *http.Request) {

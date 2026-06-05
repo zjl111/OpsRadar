@@ -52,6 +52,12 @@ func (c *Client) StepResult(ctx context.Context, result StepResult) error {
 	return c.doJSON(ctx, http.MethodPost, "/api/worker/step-result", result, &out)
 }
 
+func (c *Client) ResourceCredential(ctx context.Context, resourceID string) (Credential, error) {
+	var out Credential
+	err := c.doJSON(ctx, http.MethodGet, "/api/worker/resources/"+resourceID+"/credential", nil, &out)
+	return out, err
+}
+
 func (c *Client) TaskComplete(ctx context.Context, taskID, status string, summary map[string]any) error {
 	var out map[string]any
 	return c.doJSON(ctx, http.MethodPost, "/api/worker/task-complete", map[string]any{"task_id": taskID, "status": status, "summary": summary}, &out)

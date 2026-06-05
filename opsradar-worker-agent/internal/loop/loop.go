@@ -69,6 +69,14 @@ func (r *Runner) executeTask(ctx context.Context, task Task) {
 	}
 	for _, target := range targets {
 		resource := target.ResourceSnapshot
+		if resource.ID != "" {
+			credential, err := r.client.ResourceCredential(ctx, resource.ID)
+			if err != nil {
+				log.Printf("load credential failed for %s: %v", resource.ID, err)
+			} else {
+				resource.Credential = credential
+			}
+		}
 		for _, itemID := range selectItems(task.RuleSnapshot.ItemIDs, resource.ResourceType) {
 			result := executor.Run(ctx, executor.Resource{
 				Name:         resource.Name,
@@ -76,6 +84,8 @@ func (r *Runner) executeTask(ctx context.Context, task Task) {
 				Host:         resource.Host,
 				Port:         resource.Port,
 				Protocol:     resource.Protocol,
+				Username:     resource.Credential.Username,
+				Secret:       resource.Credential.Secret,
 			}, itemID)
 			if result.Status == "success" {
 				success++

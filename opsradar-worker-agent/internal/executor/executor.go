@@ -18,6 +18,8 @@ type Resource struct {
 	Host         string
 	Port         int
 	Protocol     string
+	Username     string
+	Secret       string
 }
 
 type Result struct {
@@ -51,7 +53,7 @@ func runRedis(ctx context.Context, resource Resource) (string, string) {
 	if resource.Port > 0 {
 		addr = fmt.Sprintf("%s:%d", resource.Host, resource.Port)
 	}
-	client := redis.NewClient(&redis.Options{Addr: addr})
+	client := redis.NewClient(&redis.Options{Addr: addr, Password: resource.Secret})
 	defer client.Close()
 	result, err := client.Ping(ctx).Result()
 	if err != nil {
@@ -69,7 +71,15 @@ func runSQL(ctx context.Context, resource Resource) (string, string) {
 	if port == 0 {
 		port = 5432
 	}
-	dsn := fmt.Sprintf("postgres://postgres:postgres@%s:%d/postgres?sslmode=disable", host, port)
+	username := resource.Username
+	if username == "" {
+		username = "postgres"
+	}
+	secret := resource.Secret
+	if secret == "" {
+		secret = "postgres"
+	}
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/postgres?sslmode=disable", username, secret, host, port)
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return "", err.Error()

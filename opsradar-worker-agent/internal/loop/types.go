@@ -14,13 +14,21 @@ type ScopeSnapshot struct {
 }
 
 type Resource struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	ResourceType string   `json:"resource_type"`
-	Host         string   `json:"host"`
-	Port         int      `json:"port"`
-	Protocol     string   `json:"protocol"`
-	Tags         []string `json:"tags"`
+	ID           string     `json:"id"`
+	Name         string     `json:"name"`
+	ResourceType string     `json:"resource_type"`
+	Host         string     `json:"host"`
+	Port         int        `json:"port"`
+	Protocol     string     `json:"protocol"`
+	Tags         []string   `json:"tags"`
+	Credential   Credential `json:"-"`
+}
+
+type Credential struct {
+	Configured     bool   `json:"configured"`
+	CredentialType string `json:"credential_type"`
+	Username       string `json:"username"`
+	Secret         string `json:"secret"`
 }
 
 type TargetRun struct {
