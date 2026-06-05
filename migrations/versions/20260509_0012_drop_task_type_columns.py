@@ -16,8 +16,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.drop_column("inspection_tasks", "task_type")
-    op.drop_column("cron_plans", "task_type")
+    op.execute("ALTER TABLE inspection_tasks DROP COLUMN IF EXISTS task_type")
+    op.execute("ALTER TABLE cron_plans DROP COLUMN IF EXISTS task_type")
 
 
 def downgrade() -> None:

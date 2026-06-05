@@ -16,6 +16,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    inspector = sa.inspect(op.get_bind())
+    if inspector.has_table("discovered_services"):
+        return
     op.create_table(
         "discovered_services",
         sa.Column("id", sa.String(length=40), nullable=False),

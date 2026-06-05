@@ -16,6 +16,10 @@ depends_on = None
 
 
 def upgrade() -> None:
+    inspector = sa.inspect(op.get_bind())
+    columns = {column["name"] for column in inspector.get_columns("ai_assistant_settings")}
+    if "model_id" in columns:
+        return
     op.add_column("ai_assistant_settings", sa.Column("model_id", sa.String(length=40), nullable=True))
     op.create_foreign_key(
         "fk_ai_assistant_settings_model_id",

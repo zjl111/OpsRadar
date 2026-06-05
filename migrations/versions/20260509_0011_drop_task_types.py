@@ -15,7 +15,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.drop_table("task_types")
+    op.execute("DROP TABLE IF EXISTS task_types")
 
 
 def downgrade() -> None:

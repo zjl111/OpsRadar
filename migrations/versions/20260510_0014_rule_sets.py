@@ -16,6 +16,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    inspector = sa.inspect(op.get_bind())
+    if inspector.has_table("rule_sets"):
+        return
     op.create_table(
         "rule_sets",
         sa.Column("id", sa.String(length=40), nullable=False),
