@@ -65,11 +65,12 @@ insert into inspection_items (id, name, item_type, resource_type, severity, exec
 values
 ('item_http_health', 'HTTP 健康检查', 'availability', 'http', 'high', 'http', '{"method":"GET","path":"/"}', '{"operator":"status_lt","value":500}', true),
 ('item_redis_ping', 'Redis PING 检查', 'availability', 'redis', 'high', 'redis', '{"command":"PING"}', '{"operator":"eq","value":"PONG"}', true),
-('item_sql_select', '数据库连通性检查', 'availability', 'database', 'high', 'sql', '{"query":"select 1"}', '{"operator":"eq","value":"1"}', true)
+('item_sql_select', '数据库连通性检查', 'availability', 'database', 'high', 'sql', '{"query":"select 1"}', '{"operator":"eq","value":"1"}', true),
+('item_host_uname', '主机 SSH 基础信息', 'availability', 'host', 'medium', 'ssh', '{"command":"uname -a","timeout_seconds":10}', '{"operator":"not_empty"}', true)
 on conflict (id) do nothing;
 insert into rule_sets (id, name, code, description, item_ids, default_enabled)
-values ('ruleset_default', '默认可用性巡检', 'default-availability', '覆盖 HTTP、Redis、数据库基础可用性', '["item_http_health","item_redis_ping","item_sql_select"]'::jsonb, true)
-on conflict (code) do nothing;
+values ('ruleset_default', '默认可用性巡检', 'default-availability', '覆盖 HTTP、Redis、数据库和主机基础可用性', '["item_http_health","item_redis_ping","item_sql_select","item_host_uname"]'::jsonb, true)
+on conflict (code) do update set description=excluded.description,item_ids=excluded.item_ids;
 `)
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err

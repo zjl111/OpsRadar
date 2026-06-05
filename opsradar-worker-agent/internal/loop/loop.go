@@ -209,6 +209,10 @@ func selectItems(rule RuleSetSnapshot, resourceType string) []InspectionItem {
 			if item == "item_sql_select" {
 				out = append(out, InspectionItem{ID: item, Executor: "sql"})
 			}
+		case "host", "linux", "server":
+			if item == "item_host_uname" {
+				out = append(out, InspectionItem{ID: item, Executor: "ssh", Script: map[string]any{"command": "uname -a", "timeout_seconds": 10}})
+			}
 		case "http", "api":
 			if item == "item_http_health" {
 				out = append(out, InspectionItem{ID: item, Executor: "http"})

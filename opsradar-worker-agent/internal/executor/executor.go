@@ -11,6 +11,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/crypto/ssh"
 )
 
 type Resource struct {
@@ -52,6 +53,8 @@ func Run(ctx context.Context, resource Resource, item Item) Result {
 		output, errText = runHTTP(ctx, resource, item.Script)
 	case "script", "shell":
 		output, errText = runShell(ctx, item.Script)
+	case "ssh", "host":
+		output, errText = runSSH(ctx, resource, item.Script)
 	default:
 		output = fmt.Sprintf("resource %s skipped by worker; executor for %s is not implemented yet", resource.Name, executor)
 	}
@@ -164,4 +167,68 @@ func runShell(ctx context.Context, script map[string]any) (string, string) {
 		return string(out), err.Error()
 	}
 	return string(out), ""
+}
+
+func runSSH(ctx context.Context, resource Resource, script map[string]any) (string, string) {
+	if resource.Host == "" {
+		return "", "ssh host is empty"
+	}
+	username := resource.Username
+	if username == "" {
+		username = "root"
+	}
+	if resource.Secret == "" {
+		return "", "ssh credential is not configured"
+	}
+	command, _ := script["command"].(string)
+	if command == "" {
+		command = "uname -a"
+	}
+	timeout := 10 * time.Second
+	if seconds, ok := script["timeout_seconds"].(float64); ok && seconds > 0 {
+		timeout = time.Duration(seconds) * time.Second
+	}
+	port := resource.Port
+	if port == 0 {
+		port = 22
+	}
+	config := &ssh.ClientConfig{
+		User:            username,
+		Auth:            []ssh.AuthMethod{ssh.Password(resource.Secret)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         timeout,
+	}
+	addr := fmt.Sprintf("%s:%d", resource.Host, port)
+	type result struct {
+		output string
+		err    error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		client, err := ssh.Dial("tcp", addr, config)
+		if err != nil {
+			ch <- result{err: err}
+			return
+		}
+		defer client.Close()
+		session, err := client.NewSession()
+		if err != nil {
+			ch <- result{err: err}
+			return
+		}
+		defer session.Close()
+		out, err := session.CombinedOutput(command)
+		ch <- result{output: string(out), err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err().Error()
+	case res := <-ch:
+		if res.err != nil {
+			return res.output, res.err.Error()
+		}
+		return res.output, ""
+	case <-time.After(timeout):
+		return "", "ssh command timeout"
+	}
 }
