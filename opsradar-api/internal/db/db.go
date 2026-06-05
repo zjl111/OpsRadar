@@ -377,6 +377,30 @@ var schema = []string{
 		created_at timestamptz not null default now(),
 		unique(scene, version)
 	)`,
+	`create table if not exists notification_channels (
+		id text primary key,
+		name text not null,
+		channel_type text not null,
+		endpoint text not null default '',
+		secret_cipher text not null default '',
+		enabled boolean not null default true,
+		settings jsonb not null default '{}'::jsonb,
+		created_at timestamptz not null default now(),
+		updated_at timestamptz not null default now()
+	)`,
+	`create table if not exists data_sources (
+		id text primary key,
+		name text not null,
+		source_type text not null,
+		endpoint text not null default '',
+		auth_type text not null default 'none',
+		secret_cipher text not null default '',
+		timeout_seconds integer not null default 10,
+		enabled boolean not null default true,
+		settings jsonb not null default '{}'::jsonb,
+		created_at timestamptz not null default now(),
+		updated_at timestamptz not null default now()
+	)`,
 	`create table if not exists repair_tasks (
 		id text primary key,
 		issue_id text references issues(id),
