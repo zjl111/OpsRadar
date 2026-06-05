@@ -70,6 +70,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/cron-plans", s.auth(s.permit("tasks:create", s.handleCreateCronPlan)))
 	s.mux.HandleFunc("GET /api/issues", s.auth(s.permit("issues:read", s.handleListIssues)))
 	s.mux.HandleFunc("GET /api/issues/{id}", s.auth(s.handleGetIssue))
+	s.mux.HandleFunc("GET /api/issues/{id}/evidences", s.auth(s.permit("issues:read", s.handleGetIssueEvidences)))
 	s.mux.HandleFunc("POST /api/issues/{id}/insight", s.auth(s.permit("issues:analyze", s.handleAnalyzeIssue)))
 	s.mux.HandleFunc("POST /api/issues/{id}/retest", s.auth(s.permit("issues:retest", s.handleRetestIssue)))
 	s.mux.HandleFunc("POST /api/repair-tasks", s.auth(s.permit("repair:create", s.handleCreateRepairTask)))
@@ -582,6 +583,83 @@ func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 	insights, _ := queryMany(r.Context(), s.db, `select id,summary,probable_causes,repair_suggestion,verification_steps,confidence,created_at from issue_insights where issue_id=$1 order by created_at desc`, []string{"id", "summary", "probable_causes", "repair_suggestion", "verification_steps", "confidence", "created_at"}, issueID)
 	issue["insights"] = insights
 	writeJSON(w, http.StatusOK, issue)
+}
+
+func (s *Server) handleGetIssueEvidences(w http.ResponseWriter, r *http.Request) {
+	issueID := r.PathValue("id")
+	issue, err := queryOne(r.Context(), s.db, `select id,title,status,severity,task_id,target_run_id,resource_id,environment_id,item_id,description,evidence,created_at from issues where id=$1`, []string{"id", "title", "status", "severity", "task_id", "target_run_id", "resource_id", "environment_id", "item_id", "description", "evidence", "created_at"}, issueID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "issue not found")
+		return
+	}
+	taskID := asString(issue["task_id"])
+	targetRunID := asString(issue["target_run_id"])
+	itemID := asString(issue["item_id"])
+
+	evidences := []map[string]any{
+		{
+			"type":        "issue_evidence",
+			"title":       "问题原始证据",
+			"source":      "issues.evidence",
+			"occurred_at": issue["created_at"],
+			"data":        issue["evidence"],
+		},
+	}
+	if targetRunID != "" {
+		steps, _ := queryMany(r.Context(), s.db, `select id,item_id,status,output,error,duration_ms,item_snapshot,created_at from step_runs where target_run_id=$1 and ($2='' or item_id=$2) order by created_at desc limit 20`, []string{"id", "item_id", "status", "output", "error", "duration_ms", "item_snapshot", "created_at"}, targetRunID, itemID)
+		for _, step := range steps {
+			evidences = append(evidences, map[string]any{
+				"type":        "inspection_result",
+				"title":       "巡检步骤结果",
+				"source":      "step_runs",
+				"occurred_at": step["created_at"],
+				"data":        step,
+			})
+		}
+	}
+	if taskID != "" {
+		logs, _ := queryMany(r.Context(), s.db, `select id,level,message,target_run_id,created_at from task_logs where task_id=$1 and ($2='' or target_run_id=$2) order by created_at desc limit 50`, []string{"id", "level", "message", "target_run_id", "created_at"}, taskID, targetRunID)
+		for _, log := range logs {
+			evidences = append(evidences, map[string]any{
+				"type":        "task_log",
+				"title":       "任务执行日志",
+				"source":      "task_logs",
+				"occurred_at": log["created_at"],
+				"data":        log,
+			})
+		}
+		reports, _ := queryMany(r.Context(), s.db, `select id,name,health_score,ai_diagnosis,created_at from inspection_reports where task_id=$1 order by created_at desc limit 5`, []string{"id", "name", "health_score", "ai_diagnosis", "created_at"}, taskID)
+		for _, report := range reports {
+			evidences = append(evidences, map[string]any{
+				"type":        "report",
+				"title":       "巡检报告摘要",
+				"source":      "inspection_reports",
+				"occurred_at": report["created_at"],
+				"data":        report,
+			})
+		}
+	}
+	insights, _ := queryMany(r.Context(), s.db, `select id,summary,probable_causes,repair_suggestion,verification_steps,confidence,created_at from issue_insights where issue_id=$1 order by created_at desc`, []string{"id", "summary", "probable_causes", "repair_suggestion", "verification_steps", "confidence", "created_at"}, issueID)
+	for _, insight := range insights {
+		evidences = append(evidences, map[string]any{
+			"type":        "ai_insight",
+			"title":       "AI 分析结论",
+			"source":      "issue_insights",
+			"occurred_at": insight["created_at"],
+			"data":        insight,
+		})
+	}
+	repairs, _ := queryMany(r.Context(), s.db, `select id,status,plan,result,logs,started_at,finished_at,created_at from repair_tasks where issue_id=$1 order by created_at desc`, []string{"id", "status", "plan", "result", "logs", "started_at", "finished_at", "created_at"}, issueID)
+	for _, repair := range repairs {
+		evidences = append(evidences, map[string]any{
+			"type":        "repair_task",
+			"title":       "修复任务记录",
+			"source":      "repair_tasks",
+			"occurred_at": repair["created_at"],
+			"data":        repair,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"issue": issue, "items": evidences})
 }
 
 func (s *Server) handleAnalyzeIssue(w http.ResponseWriter, r *http.Request) {
