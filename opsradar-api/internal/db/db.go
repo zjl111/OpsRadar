@@ -418,6 +418,16 @@ var schema = []string{
 		action_result jsonb not null default '{}'::jsonb,
 		created_at timestamptz not null default now()
 	)`,
+	`create table if not exists ai_workflows (
+		id text primary key,
+		user_id text references users(id),
+		intent text not null,
+		status text not null default 'draft',
+		params jsonb not null default '{}'::jsonb,
+		result jsonb not null default '{}'::jsonb,
+		created_at timestamptz not null default now(),
+		updated_at timestamptz not null default now()
+	)`,
 	`create table if not exists prompt_templates (
 		id text primary key,
 		name text not null,

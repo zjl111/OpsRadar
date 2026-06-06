@@ -467,6 +467,23 @@ func (s *Server) executeAIAction(ctx context.Context, user PublicUser, action st
 	}
 }
 
+func (s *Server) recordAIWorkflow(ctx context.Context, userID, intent, status string, params, result map[string]any) string {
+	if params == nil {
+		params = map[string]any{}
+	}
+	if result == nil {
+		result = map[string]any{}
+	}
+	paramsRaw, _ := json.Marshal(params)
+	resultRaw, _ := json.Marshal(result)
+	id := security.NewID("wf")
+	_, err := s.db.Exec(ctx, `insert into ai_workflows (id,user_id,intent,status,params,result) values ($1,$2,$3,$4,$5,$6)`, id, nullText(userID), intent, defaultString(status, "draft"), paramsRaw, resultRaw)
+	if err != nil {
+		return ""
+	}
+	return id
+}
+
 func actionPermission(action string) string {
 	for _, item := range aiActions() {
 		if item["action"] == action {

@@ -260,8 +260,46 @@ func (s *Server) handleExecuteAIAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	workflowID := s.recordAIWorkflow(r.Context(), user.ID, req.Action, "completed", req.Params, result)
+	if workflowID != "" {
+		result["workflow_id"] = workflowID
+	}
 	_ = s.audit(r.Context(), user.ID, user.Username, "ai.actions.execute", "ai_action", req.Action, "success", r.RemoteAddr, map[string]any{"params": req.Params})
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleListAIWorkflows(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+	query := `select id,user_id,intent,status,params,result,created_at,updated_at from ai_workflows order by created_at desc limit 100`
+	args := []any{}
+	if !hasPermission(user.Permissions, "settings:read") {
+		query = `select id,user_id,intent,status,params,result,created_at,updated_at from ai_workflows where user_id=$1 order by created_at desc limit 100`
+		args = append(args, user.ID)
+	}
+	writeRows(w, r, s.db, query, []string{"id", "user_id", "intent", "status", "params", "result", "created_at", "updated_at"}, args...)
+}
+
+func (s *Server) handleCreateAIWorkflow(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Intent string         `json:"intent"`
+		Params map[string]any `json:"params"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Intent == "" {
+		writeError(w, http.StatusBadRequest, "intent is required")
+		return
+	}
+	user := currentUser(r)
+	id := s.recordAIWorkflow(r.Context(), user.ID, req.Intent, "draft", req.Params, map[string]any{})
+	if id == "" {
+		writeError(w, http.StatusInternalServerError, "create workflow failed")
+		return
+	}
+	_ = s.audit(r.Context(), user.ID, user.Username, "ai.workflows.create", "ai_workflow", id, "success", r.RemoteAddr, map[string]any{"intent": req.Intent})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "status": "draft"})
 }
 
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
