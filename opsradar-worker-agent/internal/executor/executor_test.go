@@ -13,6 +13,49 @@ import (
 	"testing"
 )
 
+func TestRunSQLRequiresHost(t *testing.T) {
+	result := Run(context.Background(), Resource{Name: "db"}, Item{
+		Executor: "sql",
+		Script:   map[string]any{},
+	})
+
+	if result.Status != "fail" {
+		t.Fatalf("expected fail status, got %q", result.Status)
+	}
+	if result.Error != "database host is empty" {
+		t.Fatalf("unexpected error: %q", result.Error)
+	}
+}
+
+func TestRunSQLUsesScriptDatabaseAndQuery(t *testing.T) {
+	if os.Getenv("OPSRADAR_TEST_POSTGRES") == "" {
+		t.Skip("set OPSRADAR_TEST_POSTGRES=1 to run local postgres integration test")
+	}
+
+	result := Run(context.Background(), Resource{
+		Name:         "postgres",
+		ResourceType: "database",
+		Host:         "127.0.0.1",
+		Port:         5432,
+		Username:     "postgres",
+		Secret:       "postgres",
+	}, Item{
+		Executor: "sql",
+		Script: map[string]any{
+			"database":        "opsradar",
+			"query":           "select current_database()",
+			"timeout_seconds": float64(3),
+		},
+	})
+
+	if result.Status != "success" {
+		t.Fatalf("expected success status, got %q error=%q output=%q", result.Status, result.Error, result.Output)
+	}
+	if result.Output != "opsradar" {
+		t.Fatalf("expected opsradar database output, got %q", result.Output)
+	}
+}
+
 func TestRunAnsibleRunnerRequiresPrivateDataDir(t *testing.T) {
 	result := Run(context.Background(), Resource{Name: "demo"}, Item{
 		Executor: "ansible",

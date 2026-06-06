@@ -49,7 +49,7 @@ func Run(ctx context.Context, resource Resource, item Item) Result {
 	case "redis":
 		output, errText = runRedis(ctx, resource)
 	case "sql", "database", "postgres", "postgresql":
-		output, errText = runSQL(ctx, resource)
+		output, errText = runSQL(ctx, resource, item.Script)
 	case "http", "api":
 		output, errText = runHTTP(ctx, resource, item.Script)
 	case "script", "shell":
@@ -83,36 +83,39 @@ func runRedis(ctx context.Context, resource Resource) (string, string) {
 	return result, ""
 }
 
-func runSQL(ctx context.Context, resource Resource) (string, string) {
-	host := resource.Host
-	if host == "" {
-		return "", "database host is empty; DSN metadata support will be added in credential phase"
+func runSQL(ctx context.Context, resource Resource, script map[string]any) (string, string) {
+	dsn, _ := script["dsn"].(string)
+	if dsn == "" {
+		host := resource.Host
+		if host == "" {
+			return "", "database host is empty"
+		}
+		port := resource.Port
+		if port == 0 {
+			port = 5432
+		}
+		username := defaultString(resource.Username, "postgres")
+		secret := defaultString(resource.Secret, "postgres")
+		database := defaultString(stringValue(script, "database"), "postgres")
+		dsn = fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", username, secret, host, port, database)
 	}
-	port := resource.Port
-	if port == 0 {
-		port = 5432
-	}
-	username := resource.Username
-	if username == "" {
-		username = "postgres"
-	}
-	secret := resource.Secret
-	if secret == "" {
-		secret = "postgres"
-	}
-	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/postgres?sslmode=disable", username, secret, host, port)
+	query := defaultString(stringValue(script, "query"), "select 1")
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return "", err.Error()
 	}
 	defer db.Close()
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	timeout := 5 * time.Second
+	if seconds, ok := script["timeout_seconds"].(float64); ok && seconds > 0 {
+		timeout = time.Duration(seconds) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	var one int
-	if err := db.QueryRowContext(ctx, "select 1").Scan(&one); err != nil {
+	var value any
+	if err := db.QueryRowContext(ctx, query).Scan(&value); err != nil {
 		return "", err.Error()
 	}
-	return fmt.Sprintf("%d", one), ""
+	return fmt.Sprint(value), ""
 }
 
 func runHTTP(ctx context.Context, resource Resource, script map[string]any) (string, string) {
@@ -312,4 +315,16 @@ func runKubernetes(ctx context.Context, resource Resource, script map[string]any
 		return fmt.Sprintf("status=%d path=%s", resp.StatusCode, path), "kubernetes api returned error status"
 	}
 	return fmt.Sprintf("status=%d path=%s", resp.StatusCode, path), ""
+}
+
+func stringValue(values map[string]any, key string) string {
+	value, _ := values[key].(string)
+	return value
+}
+
+func defaultString(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
