@@ -998,6 +998,9 @@ func (s *Server) handleWorkerRepairComplete(w http.ResponseWriter, r *http.Reque
 	_ = s.db.QueryRow(r.Context(), `select issue_id from repair_tasks where id=$1`, req.ID).Scan(&issueID)
 	if issueID != nil && status == "finished" {
 		_, _ = s.db.Exec(r.Context(), `update issues set status='fixing', updated_at=now() where id=$1 and status in ('open','confirmed','fixing')`, *issueID)
+		if taskID, err := s.createRetestTask(r.Context(), *issueID, req.ID, nil); err == nil {
+			_ = s.writeTaskLog(r.Context(), taskID, "", "info", "修复任务 "+req.ID+" 完成后自动触发复测")
+		}
 	}
 	go s.dispatchNotification(context.Background(), "repair.completed", "修复任务完成", "修复任务 "+req.ID+" 状态："+status, map[string]any{"repair_task_id": req.ID, "issue_id": issueID, "status": status})
 	writeJSON(w, http.StatusOK, map[string]any{"id": req.ID, "status": status})
@@ -1078,6 +1081,7 @@ func (s *Server) handleWorkerTaskComplete(w http.ResponseWriter, r *http.Request
 	_, _ = s.db.Exec(r.Context(), `update target_runs set status=$1, finished_at=now() where task_id=$2 and status='running'`, status, req.TaskID)
 	_ = s.generateReport(r.Context(), req.TaskID)
 	_ = s.writeTaskLog(r.Context(), req.TaskID, "", "info", "任务已完成并生成 HTML 报告")
+	s.finalizeRetestTask(r.Context(), req.TaskID, status)
 	go s.dispatchNotification(context.Background(), "task.completed", "巡检任务完成", "任务 "+req.TaskID+" 状态："+status, map[string]any{"task_id": req.TaskID, "status": status, "summary": req.Summary})
 	writeJSON(w, http.StatusOK, map[string]any{"id": req.TaskID, "status": status})
 }

@@ -351,6 +351,62 @@ func (s *Server) createTaskFromPlan(ctx context.Context, planID, name, environme
 	return id, nil
 }
 
+func (s *Server) createRetestTask(ctx context.Context, issueID, repairTaskID string, creator any) (string, error) {
+	issue, err := queryOne(ctx, s.db, `select id,title,environment_id from issues where id=$1`, []string{"id", "title", "environment_id"}, issueID)
+	if err != nil {
+		return "", errors.New("issue not found")
+	}
+	scope, rule, err := s.taskSnapshots(ctx, asString(issue["environment_id"]), "ruleset_default")
+	if err != nil {
+		return "", err
+	}
+	scopeJSON, _ := json.Marshal(scope)
+	ruleJSON, _ := json.Marshal(rule)
+	aiPolicy, _ := json.Marshal(map[string]any{"retest": true, "issue_id": issueID, "repair_task_id": repairTaskID})
+	taskID := security.NewID("task")
+	_, err = s.db.Exec(ctx, `insert into inspection_tasks (id,name,task_type,status,environment_id,rule_set_id,scope_snapshot,rule_snapshot,report_policy,ai_policy,created_by) values ($1,$2,'retest','pending',$3,'ruleset_default',$4,$5,'{"html":true}'::jsonb,$6,$7)`,
+		taskID, "复测 "+asString(issue["title"]), nullText(asString(issue["environment_id"])), scopeJSON, ruleJSON, aiPolicy, creator)
+	if err != nil {
+		return "", err
+	}
+	if err := s.materializeTargets(ctx, taskID); err != nil {
+		return "", err
+	}
+	_, _ = s.db.Exec(ctx, `update inspection_tasks set status='queued', started_at=now(), updated_at=now() where id=$1`, taskID)
+	_, _ = s.db.Exec(ctx, `update issues set status='retesting', updated_at=now() where id=$1 and status in ('open','confirmed','fixing','retesting')`, issueID)
+	_ = s.writeTaskLog(ctx, taskID, "", "info", "问题 "+issueID+" 已创建复测任务")
+	return taskID, nil
+}
+
+func (s *Server) finalizeRetestTask(ctx context.Context, taskID, status string) {
+	var taskType string
+	var rawPolicy []byte
+	if err := s.db.QueryRow(ctx, `select task_type,ai_policy from inspection_tasks where id=$1`, taskID).Scan(&taskType, &rawPolicy); err != nil || taskType != "retest" {
+		return
+	}
+	var policy map[string]any
+	_ = json.Unmarshal(rawPolicy, &policy)
+	issueID := asString(policy["issue_id"])
+	if issueID == "" {
+		return
+	}
+	var failedSteps int
+	_ = s.db.QueryRow(ctx, `
+select count(*)
+from step_runs sr
+join target_runs tr on tr.id=sr.target_run_id
+where tr.task_id=$1 and sr.status in ('fail','exception')`, taskID).Scan(&failedSteps)
+	if status == "finished" && failedSteps == 0 {
+		_, _ = s.db.Exec(ctx, `update issues set status='closed', updated_at=now() where id=$1 and status in ('open','confirmed','fixing','retesting','fixed')`, issueID)
+		_ = s.writeTaskLog(ctx, taskID, "", "info", "复测通过，问题已关闭："+issueID)
+		go s.dispatchNotification(context.Background(), "issue.closed", "复测通过，问题已关闭", "问题 "+issueID+" 已通过复测并关闭", map[string]any{"issue_id": issueID, "task_id": taskID})
+		return
+	}
+	_, _ = s.db.Exec(ctx, `update issues set status='open', updated_at=now() where id=$1 and status in ('fixing','retesting','fixed')`, issueID)
+	_ = s.writeTaskLog(ctx, taskID, "", "warn", fmt.Sprintf("复测未通过，失败步骤数：%d，问题保持打开：%s", failedSteps, issueID))
+	go s.dispatchNotification(context.Background(), "issue.retest_failed", "复测未通过", "问题 "+issueID+" 复测未通过，仍需处理", map[string]any{"issue_id": issueID, "task_id": taskID, "failed_steps": failedSteps})
+}
+
 func (s *Server) runDueCronPlans(ctx context.Context) error {
 	rows, err := s.db.Query(ctx, `select id,name,environment_id,rule_set_id,interval_seconds from cron_plans where enabled=true and next_run_at <= now() order by next_run_at limit 20`)
 	if err != nil {

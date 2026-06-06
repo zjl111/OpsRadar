@@ -50,22 +50,12 @@ func (s *Server) handleCreateCronPlan(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRetestIssue(w http.ResponseWriter, r *http.Request) {
 	issueID := r.PathValue("id")
-	issue, err := queryOne(r.Context(), s.db, `select id,title,environment_id,item_id from issues where id=$1`, []string{"id", "title", "environment_id", "item_id"}, issueID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "issue not found")
-		return
-	}
 	u := currentUser(r)
-	taskID, err := s.createTaskFromPlan(r.Context(), "", "复测 "+asString(issue["title"]), asString(issue["environment_id"]), "ruleset_default", u.ID)
+	taskID, err := s.createRetestTask(r.Context(), issueID, "", u.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := s.materializeTargets(r.Context(), taskID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	_, _ = s.db.Exec(r.Context(), `update inspection_tasks set status='queued', started_at=now(), updated_at=now() where id=$1`, taskID)
 	_ = s.audit(r.Context(), u.ID, u.Username, "issues.retest", "issue", issueID, "success", r.RemoteAddr, map[string]any{"task_id": taskID})
 	writeJSON(w, http.StatusCreated, map[string]any{"task_id": taskID, "status": "queued"})
 }
