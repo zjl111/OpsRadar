@@ -464,6 +464,28 @@ var schema = []string{
 		value jsonb not null default '{}'::jsonb,
 		updated_at timestamptz not null default now()
 	)`,
+	`create table if not exists knowledge_spaces (
+		id text primary key,
+		name text not null,
+		code text not null unique,
+		description text not null default '',
+		created_by text references users(id),
+		created_at timestamptz not null default now(),
+		updated_at timestamptz not null default now()
+	)`,
+	`create table if not exists knowledge_documents (
+		id text primary key,
+		space_id text not null references knowledge_spaces(id) on delete cascade,
+		title text not null,
+		content text not null default '',
+		source_type text not null default 'manual',
+		source_uri text not null default '',
+		tags jsonb not null default '[]'::jsonb,
+		metadata jsonb not null default '{}'::jsonb,
+		created_by text references users(id),
+		created_at timestamptz not null default now(),
+		updated_at timestamptz not null default now()
+	)`,
 	`create table if not exists data_sources (
 		id text primary key,
 		name text not null,

@@ -176,6 +176,40 @@ func boolFromAny(value any) bool {
 	return v
 }
 
+func snippet(content, query string, limit int) string {
+	if limit <= 0 {
+		limit = 240
+	}
+	text := strings.TrimSpace(content)
+	if len([]rune(text)) <= limit {
+		return text
+	}
+	runes := []rune(text)
+	lowerRunes := []rune(strings.ToLower(text))
+	queryRunes := []rune(strings.ToLower(strings.TrimSpace(query)))
+	idx := -1
+	if len(queryRunes) > 0 {
+		for i := 0; i+len(queryRunes) <= len(lowerRunes); i++ {
+			if string(lowerRunes[i:i+len(queryRunes)]) == string(queryRunes) {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx < 0 {
+		return string(runes[:limit])
+	}
+	start := idx - limit/3
+	if start < 0 {
+		start = 0
+	}
+	end := start + limit
+	if end > len(runes) {
+		end = len(runes)
+	}
+	return string(runes[start:end])
+}
+
 func toJSONString(value any) string {
 	body, err := json.Marshal(value)
 	if err != nil {

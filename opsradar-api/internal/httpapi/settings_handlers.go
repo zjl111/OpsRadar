@@ -242,6 +242,120 @@ func (s *Server) handleQueryDataSource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleListKnowledgeSpaces(w http.ResponseWriter, r *http.Request) {
+	writeRows(w, r, s.db, `select ks.id,ks.name,ks.code,ks.description,count(kd.id) as document_count,ks.created_at,ks.updated_at from knowledge_spaces ks left join knowledge_documents kd on kd.space_id=ks.id group by ks.id order by ks.created_at desc`, []string{"id", "name", "code", "description", "document_count", "created_at", "updated_at"})
+}
+
+func (s *Server) handleCreateKnowledgeSpace(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name        string `json:"name"`
+		Code        string `json:"code"`
+		Description string `json:"description"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" || req.Code == "" {
+		writeError(w, http.StatusBadRequest, "name and code are required")
+		return
+	}
+	id := security.NewID("ks")
+	u := currentUser(r)
+	_, err := s.db.Exec(r.Context(), `insert into knowledge_spaces (id,name,code,description,created_by) values ($1,$2,$3,$4,$5)`, id, req.Name, req.Code, req.Description, nullText(u.ID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_ = s.audit(r.Context(), u.ID, u.Username, "knowledge.spaces.create", "knowledge_space", id, "success", r.RemoteAddr, map[string]any{"code": req.Code})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
+func (s *Server) handleListKnowledgeDocuments(w http.ResponseWriter, r *http.Request) {
+	spaceID := r.URL.Query().Get("space_id")
+	if spaceID != "" {
+		writeRows(w, r, s.db, `select id,space_id,title,source_type,source_uri,tags,metadata,created_at,updated_at from knowledge_documents where space_id=$1 order by created_at desc limit 200`, []string{"id", "space_id", "title", "source_type", "source_uri", "tags", "metadata", "created_at", "updated_at"}, spaceID)
+		return
+	}
+	writeRows(w, r, s.db, `select id,space_id,title,source_type,source_uri,tags,metadata,created_at,updated_at from knowledge_documents order by created_at desc limit 200`, []string{"id", "space_id", "title", "source_type", "source_uri", "tags", "metadata", "created_at", "updated_at"})
+}
+
+func (s *Server) handleCreateKnowledgeDocument(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SpaceID    string         `json:"space_id"`
+		Title      string         `json:"title"`
+		Content    string         `json:"content"`
+		SourceType string         `json:"source_type"`
+		SourceURI  string         `json:"source_uri"`
+		Tags       []string       `json:"tags"`
+		Metadata   map[string]any `json:"metadata"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.SpaceID == "" || req.Title == "" {
+		writeError(w, http.StatusBadRequest, "space_id and title are required")
+		return
+	}
+	tags, _ := json.Marshal(req.Tags)
+	metadata, _ := json.Marshal(req.Metadata)
+	id := security.NewID("kd")
+	u := currentUser(r)
+	_, err := s.db.Exec(r.Context(), `insert into knowledge_documents (id,space_id,title,content,source_type,source_uri,tags,metadata,created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		id, req.SpaceID, req.Title, req.Content, defaultString(req.SourceType, "manual"), req.SourceURI, tags, metadata, nullText(u.ID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_ = s.audit(r.Context(), u.ID, u.Username, "knowledge.documents.create", "knowledge_document", id, "success", r.RemoteAddr, map[string]any{"space_id": req.SpaceID})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
+func (s *Server) handleKnowledgeSearch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Query   string `json:"query"`
+		SpaceID string `json:"space_id"`
+		Limit   int    `json:"limit"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Query) == "" {
+		writeError(w, http.StatusBadRequest, "query is required")
+		return
+	}
+	if req.Limit <= 0 || req.Limit > 20 {
+		req.Limit = 10
+	}
+	pattern := "%" + strings.ToLower(req.Query) + "%"
+	rows, err := s.db.Query(r.Context(), `
+select kd.id,kd.space_id,ks.name,kd.title,kd.content,kd.source_type,kd.source_uri,kd.created_at
+from knowledge_documents kd
+join knowledge_spaces ks on ks.id=kd.space_id
+where ($1='' or kd.space_id=$1)
+  and (lower(kd.title) like $2 or lower(kd.content) like $2)
+order by kd.updated_at desc
+limit $3`, req.SpaceID, pattern, req.Limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id, spaceID, spaceName, title, content, sourceType, sourceURI string
+		var createdAt time.Time
+		if err := rows.Scan(&id, &spaceID, &spaceName, &title, &content, &sourceType, &sourceURI, &createdAt); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		items = append(items, map[string]any{"id": id, "space_id": spaceID, "space_name": spaceName, "title": title, "snippet": snippet(content, req.Query, 240), "source_type": sourceType, "source_uri": sourceURI, "created_at": createdAt})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 type dataSourceConfig struct {
 	ID             string
 	Name           string
