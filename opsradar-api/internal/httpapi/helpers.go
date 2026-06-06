@@ -156,6 +156,52 @@ func asString(value any) string {
 	return fmt.Sprint(value)
 }
 
+func htmlEscape(value string) string {
+	return template.HTMLEscapeString(maskSensitive(value))
+}
+
+func truncateForReport(value string, limit int) string {
+	runes := []rune(strings.TrimSpace(value))
+	if limit <= 0 || len(runes) <= limit {
+		return string(runes)
+	}
+	return string(runes[:limit]) + "\n... 已截断 ..."
+}
+
+func stringSliceFromAny(value any) []string {
+	switch v := value.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if text := strings.TrimSpace(asString(item)); text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func mapsFromAny(value any) []map[string]any {
+	switch v := value.(type) {
+	case []map[string]any:
+		return v
+	case []any:
+		out := make([]map[string]any, 0, len(v))
+		for _, item := range v {
+			if row, ok := item.(map[string]any); ok {
+				out = append(out, row)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 func intFromAny(value any) int {
 	switch v := value.(type) {
 	case int:
@@ -628,11 +674,45 @@ func (s *Server) generateReport(ctx context.Context, taskID string) error {
 	if score < 0 {
 		score = 0
 	}
-	html := renderReportHTML(task, score, issueCount)
+	steps, _ := queryMany(ctx, s.db, `
+select sr.id,sr.item_id,sr.status,sr.output,sr.error,sr.duration_ms,tr.resource_id,sr.created_at
+from step_runs sr
+join target_runs tr on tr.id=sr.target_run_id
+where tr.task_id=$1
+order by sr.created_at desc
+limit 200`, []string{"id", "item_id", "status", "output", "error", "duration_ms", "resource_id", "created_at"}, taskID)
+	issues, _ := queryMany(ctx, s.db, `
+select i.id,i.title,i.status,i.severity,i.description,i.evidence,
+       coalesce(ii.summary,'') as ai_summary,
+       coalesce(ii.repair_suggestion,'') as repair_suggestion,
+       coalesce(ii.verification_steps,'[]'::jsonb) as verification_steps
+from issues i
+left join lateral (
+	select summary,repair_suggestion,verification_steps
+	from issue_insights
+	where issue_id=i.id
+	order by created_at desc
+	limit 1
+) ii on true
+where i.task_id=$1
+order by i.created_at desc
+limit 100`, []string{"id", "title", "status", "severity", "description", "evidence", "ai_summary", "repair_suggestion", "verification_steps"}, taskID)
 	diagnosis := map[string]any{
-		"status":  "generated",
-		"summary": fmt.Sprintf("本次巡检健康分 %d，发现 %d 个问题。", score, issueCount),
+		"status":              "generated",
+		"summary":             fmt.Sprintf("本次巡检健康分 %d，发现 %d 个问题，采集 %d 条步骤结果。", score, issueCount, len(steps)),
+		"health_score_reason": reportScoreReason(score, issueCount),
+		"top_risks":           reportTopRisks(issues),
+		"recommendations":     reportRecommendations(issues),
+		"citations":           reportCitations(issues, steps),
 	}
+	html := renderReportHTML(reportRenderData{
+		Task:       task,
+		Score:      score,
+		IssueCount: issueCount,
+		Steps:      steps,
+		Issues:     issues,
+		Diagnosis:  diagnosis,
+	})
 	diagJSON, _ := json.Marshal(diagnosis)
 	_, err = s.db.Exec(ctx, `insert into inspection_reports (id,task_id,name,format,status,health_score,content_html,ai_diagnosis) values ($1,$2,$3,'html','generated',$4,$5,$6)`,
 		security.NewID("report"), taskID, asString(task["name"])+" 巡检报告", score, html, diagJSON)
@@ -798,13 +878,176 @@ func (s *Server) writeReportForTask(w http.ResponseWriter, r *http.Request, prev
 	writeJSON(w, http.StatusOK, report)
 }
 
-func renderReportHTML(task map[string]any, score, issueCount int) string {
-	name := template.HTMLEscapeString(asString(task["name"]))
-	return fmt.Sprintf(`<!doctype html>
+type reportRenderData struct {
+	Task       map[string]any
+	Score      int
+	IssueCount int
+	Steps      []map[string]any
+	Issues     []map[string]any
+	Diagnosis  map[string]any
+}
+
+func reportScoreReason(score, issueCount int) string {
+	if issueCount == 0 {
+		return "未发现异常问题，健康分保持满分。"
+	}
+	if score >= 80 {
+		return "存在少量异常问题，整体健康状况可控。"
+	}
+	if score >= 60 {
+		return "存在多项异常，需要按严重级别推进修复和复测。"
+	}
+	return "异常较多，建议优先处理高危资源并复核关键业务影响。"
+}
+
+func reportTopRisks(issues []map[string]any) []string {
+	if len(issues) == 0 {
+		return []string{"未发现开放异常。"}
+	}
+	risks := make([]string, 0, 5)
+	for _, issue := range issues {
+		risks = append(risks, fmt.Sprintf("%s：%s", defaultString(asString(issue["severity"]), "medium"), asString(issue["title"])))
+		if len(risks) >= 5 {
+			break
+		}
+	}
+	return risks
+}
+
+func reportRecommendations(issues []map[string]any) []string {
+	if len(issues) == 0 {
+		return []string{"按现有巡检计划持续监控，并定期复核规则阈值。"}
+	}
+	recommendations := make([]string, 0, 6)
+	for _, issue := range issues {
+		if suggestion := strings.TrimSpace(asString(issue["repair_suggestion"])); suggestion != "" {
+			recommendations = append(recommendations, suggestion)
+		}
+		if len(recommendations) >= 5 {
+			break
+		}
+	}
+	recommendations = append(recommendations, "修复后发起复测任务，复测通过后关闭对应问题。")
+	return recommendations
+}
+
+func reportCitations(issues, steps []map[string]any) []string {
+	citations := make([]string, 0, 8)
+	for _, issue := range issues {
+		citations = append(citations, "issue:"+asString(issue["id"]))
+		if len(citations) >= 5 {
+			break
+		}
+	}
+	for _, step := range steps {
+		status := asString(step["status"])
+		if status != "success" && status != "passed" {
+			citations = append(citations, "step_run:"+asString(step["id"]))
+		}
+		if len(citations) >= 8 {
+			break
+		}
+	}
+	if len(citations) == 0 {
+		citations = append(citations, "inspection_task")
+	}
+	return citations
+}
+
+func renderReportHTML(data reportRenderData) string {
+	name := htmlEscape(asString(data.Task["name"]))
+	var b strings.Builder
+	fmt.Fprintf(&b, `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>%s</title>
-<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:40px;color:#172033}section{margin-top:24px}pre{background:#f5f7fb;padding:16px;border-radius:8px;white-space:pre-wrap}.badge{display:inline-block;padding:4px 10px;border-radius:99px;background:#e8f2ff;color:#0759b8}</style></head>
-<body><h1>%s</h1><p class="badge">健康分 %d</p><section><h2>AI 综合诊断</h2><p>本报告基于任务快照、目标执行结果和问题证据生成。发现问题数：%d。</p></section><section><h2>任务快照</h2><pre>%s</pre></section></body></html>`,
-		name, name, score, issueCount, template.HTMLEscapeString(fmt.Sprint(task["scope_snapshot"])))
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:40px;color:#172033;line-height:1.55}
+h1{margin-bottom:8px}h2{margin-top:32px;border-bottom:1px solid #dce3ef;padding-bottom:8px}
+table{width:100%%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #dce3ef;padding:8px;text-align:left;vertical-align:top}
+th{background:#f5f7fb}.badge{display:inline-block;padding:4px 10px;border-radius:999px;background:#e8f2ff;color:#0759b8;margin-right:8px}
+.risk{background:#fff4e5;color:#a45100}.ok{background:#e9f8ef;color:#146c2e}
+pre{background:#f5f7fb;padding:14px;border-radius:8px;white-space:pre-wrap;word-break:break-word}
+.muted{color:#607089}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.card{border:1px solid #dce3ef;border-radius:8px;padding:12px}
+</style></head><body>`, name)
+	fmt.Fprintf(&b, `<h1>%s</h1><p class="muted">任务 ID：%s · 状态：%s</p>`, name, htmlEscape(asString(data.Task["id"])), htmlEscape(asString(data.Task["status"])))
+	fmt.Fprintf(&b, `<div><span class="badge">健康分 %d</span><span class="badge risk">问题数 %d</span><span class="badge">步骤结果 %d</span></div>`, data.Score, data.IssueCount, len(data.Steps))
+	fmt.Fprintf(&b, `<section><h2>AI 综合诊断</h2><p>%s</p><p class="muted">%s</p>`, htmlEscape(asString(data.Diagnosis["summary"])), htmlEscape(asString(data.Diagnosis["health_score_reason"])))
+	writeStringList(&b, "主要风险", stringSliceFromAny(data.Diagnosis["top_risks"]))
+	writeStringList(&b, "修复建议", stringSliceFromAny(data.Diagnosis["recommendations"]))
+	writeStringList(&b, "证据引用", stringSliceFromAny(data.Diagnosis["citations"]))
+	b.WriteString(`</section>`)
+	fmt.Fprintf(&b, `<section><h2>任务快照</h2><div class="grid"><div class="card"><strong>任务类型</strong><br>%s</div><div class="card"><strong>优先级</strong><br>%s</div><div class="card"><strong>开始时间</strong><br>%s</div><div class="card"><strong>结束时间</strong><br>%s</div></div><pre>%s</pre></section>`,
+		htmlEscape(asString(data.Task["task_type"])), htmlEscape(asString(data.Task["priority"])), htmlEscape(fmt.Sprint(data.Task["started_at"])), htmlEscape(fmt.Sprint(data.Task["finished_at"])), htmlEscape(fmt.Sprint(data.Task["scope_snapshot"])))
+	writeIssueAnalysis(&b, data.Issues)
+	writeStepTable(&b, data.Steps)
+	writeTaskLogs(&b, mapsFromAny(data.Task["logs"]))
+	b.WriteString(`</body></html>`)
+	return maskSensitive(b.String())
+}
+
+func writeStringList(b *strings.Builder, title string, items []string) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintf(b, `<h3>%s</h3><ul>`, htmlEscape(title))
+	for _, item := range items {
+		fmt.Fprintf(b, `<li>%s</li>`, htmlEscape(item))
+	}
+	b.WriteString(`</ul>`)
+}
+
+func writeIssueAnalysis(b *strings.Builder, issues []map[string]any) {
+	b.WriteString(`<section><h2>异常分析与证据链</h2>`)
+	if len(issues) == 0 {
+		b.WriteString(`<p class="ok badge">未发现异常问题</p>`)
+		b.WriteString(`</section>`)
+		return
+	}
+	for _, issue := range issues {
+		fmt.Fprintf(b, `<article><h3>%s</h3><p><span class="badge risk">%s</span><span class="badge">%s</span></p><p>%s</p>`,
+			htmlEscape(asString(issue["title"])), htmlEscape(asString(issue["severity"])), htmlEscape(asString(issue["status"])), htmlEscape(asString(issue["description"])))
+		if summary := strings.TrimSpace(asString(issue["ai_summary"])); summary != "" {
+			fmt.Fprintf(b, `<p><strong>AI 根因分析：</strong>%s</p>`, htmlEscape(summary))
+		}
+		suggestion := strings.TrimSpace(asString(issue["repair_suggestion"]))
+		if suggestion == "" {
+			suggestion = "按严重级别优先处理该异常，修复后发起复测并确认问题关闭。"
+		}
+		fmt.Fprintf(b, `<p><strong>建议处理：</strong>%s</p>`, htmlEscape(suggestion))
+		fmt.Fprintf(b, `<pre>%s</pre></article>`, htmlEscape(toJSONString(issue["evidence"])))
+	}
+	b.WriteString(`</section>`)
+}
+
+func writeStepTable(b *strings.Builder, steps []map[string]any) {
+	b.WriteString(`<section><h2>巡检步骤结果</h2>`)
+	if len(steps) == 0 {
+		b.WriteString(`<p class="muted">暂无步骤结果。</p></section>`)
+		return
+	}
+	b.WriteString(`<table><thead><tr><th>资源</th><th>巡检项</th><th>状态</th><th>耗时</th><th>输出/错误</th></tr></thead><tbody>`)
+	for _, step := range steps {
+		detail := strings.TrimSpace(asString(step["error"]))
+		if detail == "" {
+			detail = asString(step["output"])
+		}
+		fmt.Fprintf(b, `<tr><td>%s</td><td>%s</td><td>%s</td><td>%sms</td><td><pre>%s</pre></td></tr>`,
+			htmlEscape(asString(step["resource_id"])), htmlEscape(asString(step["item_id"])), htmlEscape(asString(step["status"])), htmlEscape(fmt.Sprint(step["duration_ms"])), htmlEscape(truncateForReport(detail, 1200)))
+	}
+	b.WriteString(`</tbody></table></section>`)
+}
+
+func writeTaskLogs(b *strings.Builder, logs []map[string]any) {
+	b.WriteString(`<section><h2>任务日志</h2>`)
+	if len(logs) == 0 {
+		b.WriteString(`<p class="muted">暂无任务日志。</p></section>`)
+		return
+	}
+	b.WriteString(`<table><thead><tr><th>时间</th><th>级别</th><th>消息</th></tr></thead><tbody>`)
+	for _, log := range logs {
+		fmt.Fprintf(b, `<tr><td>%s</td><td>%s</td><td>%s</td></tr>`,
+			htmlEscape(fmt.Sprint(log["created_at"])), htmlEscape(asString(log["level"])), htmlEscape(asString(log["message"])))
+	}
+	b.WriteString(`</tbody></table></section>`)
 }
 
 func severityFromStatus(status string) string {
