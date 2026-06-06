@@ -52,6 +52,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/resources", s.auth(s.permit("resources:read", s.handleListResources)))
 	s.mux.HandleFunc("POST /api/resources", s.auth(s.permit("resources:create", s.handleCreateResource)))
 	s.mux.HandleFunc("POST /api/resources/import", s.auth(s.permit("resources:import", s.handleImportResources)))
+	s.mux.HandleFunc("POST /api/resources/{id}/test", s.auth(s.permit("resources:read", s.handleTestResource)))
+	s.mux.HandleFunc("POST /api/resources/{id}/discover-services", s.auth(s.permit("resources:read", s.handleDiscoverResourceServices)))
 	s.mux.HandleFunc("POST /api/resources/{id}/credential", s.auth(s.permit("resources:credential", s.handleUpsertResourceCredential)))
 	s.mux.HandleFunc("GET /api/environments", s.auth(s.handleListEnvironments))
 	s.mux.HandleFunc("POST /api/environments", s.auth(s.permit("resources:create", s.handleCreateEnvironment)))
@@ -321,6 +323,53 @@ func (s *Server) handleCreateResource(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	_ = s.audit(r.Context(), u.ID, u.Username, "resources.create", "resource", id, "success", r.RemoteAddr, map[string]any{"name": req.Name})
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
+func (s *Server) handleTestResource(w http.ResponseWriter, r *http.Request) {
+	resourceID := r.PathValue("id")
+	resource, err := s.getResourceEndpoint(r.Context(), resourceID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "resource not found")
+		return
+	}
+	result := testEndpoint(r.Context(), resource)
+	status := "offline"
+	if result["ok"] == true {
+		status = "online"
+	}
+	_, _ = s.db.Exec(r.Context(), `update resources set status=$1,last_check_at=now(),updated_at=now() where id=$2`, status, resourceID)
+	u := currentUser(r)
+	_ = s.audit(r.Context(), u.ID, u.Username, "resources.test", "resource", resourceID, status, r.RemoteAddr, result)
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleDiscoverResourceServices(w http.ResponseWriter, r *http.Request) {
+	resourceID := r.PathValue("id")
+	resource, err := s.getResourceEndpoint(r.Context(), resourceID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "resource not found")
+		return
+	}
+	ports := []int{22, 80, 443, 5432, 3306, 6379, 8080, 8443, 9090, 9093, 3000, 5601, 9200}
+	if resource.Port > 0 {
+		ports = append([]int{resource.Port}, ports...)
+	}
+	seen := map[int]bool{}
+	services := []map[string]any{}
+	for _, port := range ports {
+		if seen[port] {
+			continue
+		}
+		seen[port] = true
+		result := testTCP(r.Context(), resource.Host, port, 800*time.Millisecond)
+		if result["ok"] == true {
+			services = append(services, map[string]any{"port": port, "service": serviceName(port), "protocol": serviceProtocol(port), "status": "open"})
+		}
+	}
+	_, _ = s.db.Exec(r.Context(), `update resources set metadata=jsonb_set(coalesce(metadata,'{}'::jsonb), '{discovered_services}', $1::jsonb, true), last_check_at=now(), updated_at=now() where id=$2`, toJSONString(services), resourceID)
+	u := currentUser(r)
+	_ = s.audit(r.Context(), u.ID, u.Username, "resources.discover_services", "resource", resourceID, "success", r.RemoteAddr, map[string]any{"count": len(services)})
+	writeJSON(w, http.StatusOK, map[string]any{"resource_id": resourceID, "items": services})
 }
 
 func (s *Server) handleListEnvironments(w http.ResponseWriter, r *http.Request) {

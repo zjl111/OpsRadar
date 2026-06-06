@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -161,6 +162,131 @@ func toJSONString(value any) string {
 		return "{}"
 	}
 	return string(body)
+}
+
+type resourceEndpoint struct {
+	ID           string
+	Name         string
+	ResourceType string
+	Host         string
+	Port         int
+	Protocol     string
+}
+
+func (s *Server) getResourceEndpoint(ctx context.Context, resourceID string) (resourceEndpoint, error) {
+	var resource resourceEndpoint
+	err := s.db.QueryRow(ctx, `select id,name,resource_type,host,port,protocol from resources where id=$1`, resourceID).
+		Scan(&resource.ID, &resource.Name, &resource.ResourceType, &resource.Host, &resource.Port, &resource.Protocol)
+	return resource, err
+}
+
+func testEndpoint(ctx context.Context, resource resourceEndpoint) map[string]any {
+	if resource.Host == "" {
+		return map[string]any{"ok": false, "error": "resource host is empty", "checked_at": time.Now()}
+	}
+	port := resource.Port
+	if port == 0 {
+		port = defaultResourcePort(resource.ResourceType, resource.Protocol)
+	}
+	start := time.Now()
+	if strings.HasPrefix(strings.ToLower(resource.Protocol), "http") || resource.ResourceType == "http" {
+		scheme := defaultString(resource.Protocol, "http")
+		if !strings.HasPrefix(scheme, "http") {
+			scheme = "http"
+		}
+		reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, fmt.Sprintf("%s://%s:%d/", scheme, resource.Host, port), nil)
+		if err != nil {
+			return map[string]any{"ok": false, "error": err.Error(), "duration_ms": time.Since(start).Milliseconds(), "checked_at": time.Now()}
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return map[string]any{"ok": false, "error": err.Error(), "duration_ms": time.Since(start).Milliseconds(), "checked_at": time.Now()}
+		}
+		defer resp.Body.Close()
+		return map[string]any{"ok": resp.StatusCode < 500, "status_code": resp.StatusCode, "host": resource.Host, "port": port, "duration_ms": time.Since(start).Milliseconds(), "checked_at": time.Now()}
+	}
+	result := testTCP(ctx, resource.Host, port, 3*time.Second)
+	result["duration_ms"] = time.Since(start).Milliseconds()
+	result["checked_at"] = time.Now()
+	return result
+}
+
+func testTCP(ctx context.Context, host string, port int, timeout time.Duration) map[string]any {
+	if host == "" || port <= 0 {
+		return map[string]any{"ok": false, "host": host, "port": port, "error": "host and port are required"}
+	}
+	dialer := net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", host, port))
+	if err != nil {
+		return map[string]any{"ok": false, "host": host, "port": port, "error": err.Error()}
+	}
+	_ = conn.Close()
+	return map[string]any{"ok": true, "host": host, "port": port}
+}
+
+func defaultResourcePort(resourceType, protocol string) int {
+	switch strings.ToLower(defaultString(protocol, resourceType)) {
+	case "https":
+		return 443
+	case "ssh", "host", "linux", "server":
+		return 22
+	case "postgres", "postgresql", "database":
+		return 5432
+	case "mysql":
+		return 3306
+	case "redis":
+		return 6379
+	case "prometheus":
+		return 9090
+	default:
+		return 80
+	}
+}
+
+func serviceName(port int) string {
+	switch port {
+	case 22:
+		return "ssh"
+	case 80:
+		return "http"
+	case 443:
+		return "https"
+	case 3000:
+		return "grafana"
+	case 3306:
+		return "mysql"
+	case 5432:
+		return "postgresql"
+	case 5601:
+		return "kibana"
+	case 6379:
+		return "redis"
+	case 8080:
+		return "http-alt"
+	case 8443:
+		return "https-alt"
+	case 9090:
+		return "prometheus"
+	case 9093:
+		return "alertmanager"
+	case 9200:
+		return "elasticsearch"
+	default:
+		return "tcp"
+	}
+}
+
+func serviceProtocol(port int) string {
+	switch port {
+	case 80, 8080, 9090, 9093, 3000, 5601, 9200:
+		return "http"
+	case 443, 8443:
+		return "https"
+	default:
+		return "tcp"
+	}
 }
 
 func levelByCount(n int) string {
