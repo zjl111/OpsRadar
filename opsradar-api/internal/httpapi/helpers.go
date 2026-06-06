@@ -315,6 +315,113 @@ func inferAction(message string) string {
 	}
 }
 
+func aiActions() []map[string]any {
+	return []map[string]any{
+		{"action": "create_inspection_draft", "title": "创建巡检草稿", "permission": "tasks:create", "requires_confirmation": false},
+		{"action": "create_inspection_task", "title": "创建巡检任务", "permission": "tasks:create", "requires_confirmation": true},
+		{"action": "start_inspection_task", "title": "启动巡检任务", "permission": "tasks:start", "requires_confirmation": true},
+		{"action": "create_and_run_inspection", "title": "创建并执行巡检", "permission": "tasks:create", "requires_confirmation": true},
+		{"action": "analyze_issue", "title": "分析问题", "permission": "issues:analyze", "requires_confirmation": false},
+		{"action": "retest_issue", "title": "发起复测", "permission": "issues:retest", "requires_confirmation": true},
+		{"action": "generate_report_diagnosis", "title": "生成报告诊断", "permission": "reports:diagnose", "requires_confirmation": false},
+	}
+}
+
+func (s *Server) executeAIAction(ctx context.Context, user PublicUser, action string, params map[string]any) (map[string]any, error) {
+	if params == nil {
+		params = map[string]any{}
+	}
+	permission := actionPermission(action)
+	if permission != "" && !hasPermission(user.Permissions, permission) {
+		return nil, fmt.Errorf("permission denied: %s", permission)
+	}
+	switch action {
+	case "create_inspection_draft", "create_inspection_task", "create_and_run_inspection":
+		name := defaultString(asString(params["name"]), "AI 创建巡检任务 "+time.Now().Format("2006-01-02 15:04"))
+		envID := asString(params["environment_id"])
+		ruleSetID := defaultString(asString(params["rule_set_id"]), "ruleset_default")
+		taskID, err := s.createTaskFromPlan(ctx, "", name, envID, ruleSetID, user.ID)
+		if err != nil {
+			return nil, err
+		}
+		status := "pending"
+		if action == "create_and_run_inspection" {
+			if err := s.materializeTargets(ctx, taskID); err != nil {
+				return nil, err
+			}
+			_, _ = s.db.Exec(ctx, `update inspection_tasks set status='queued', started_at=now(), updated_at=now() where id=$1`, taskID)
+			status = "queued"
+		}
+		return map[string]any{"action": action, "task_id": taskID, "status": status}, nil
+	case "start_inspection_task":
+		taskID := asString(params["task_id"])
+		if taskID == "" {
+			return nil, errors.New("task_id is required")
+		}
+		if err := s.materializeTargets(ctx, taskID); err != nil {
+			return nil, err
+		}
+		_, err := s.db.Exec(ctx, `update inspection_tasks set status='queued', started_at=coalesce(started_at, now()), updated_at=now() where id=$1 and status in ('pending','failed','cancelled')`, taskID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"action": action, "task_id": taskID, "status": "queued"}, nil
+	case "analyze_issue":
+		issueID := asString(params["issue_id"])
+		if issueID == "" {
+			return nil, errors.New("issue_id is required")
+		}
+		issue, err := queryOne(ctx, s.db, `select id,title,status,severity,description,evidence from issues where id=$1`, []string{"id", "title", "status", "severity", "description", "evidence"}, issueID)
+		if err != nil {
+			return nil, errors.New("issue not found")
+		}
+		content, aiMeta := s.callAI(ctx, "issue_analysis", "AI 已生成问题分析。", "问题上下文："+toJSONString(issue))
+		insightID := security.NewID("insight")
+		_, err = s.db.Exec(ctx, `insert into issue_insights (id,issue_id,summary,probable_causes,repair_suggestion,verification_steps,confidence) values ($1,$2,$3,$4,$5,$6,$7)`,
+			insightID, issueID, content, toJSONString([]string{"巡检异常", "服务状态异常"}), "按证据链处理后执行复测。", toJSONString([]string{"复测相同巡检项", "确认问题关闭"}), 0.7)
+		if err != nil {
+			return nil, err
+		}
+		_, _ = s.db.Exec(ctx, `update issues set ai_status='analyzed', updated_at=now() where id=$1`, issueID)
+		return map[string]any{"action": action, "issue_id": issueID, "insight_id": insightID, "ai": aiMeta}, nil
+	case "retest_issue":
+		issueID := asString(params["issue_id"])
+		if issueID == "" {
+			return nil, errors.New("issue_id is required")
+		}
+		taskID, err := s.createRetestTask(ctx, issueID, "", user.ID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"action": action, "issue_id": issueID, "task_id": taskID, "status": "queued"}, nil
+	case "generate_report_diagnosis":
+		taskID := asString(params["task_id"])
+		if taskID == "" {
+			return nil, errors.New("task_id is required")
+		}
+		report, _ := queryOne(ctx, s.db, `select id,name,health_score,ai_diagnosis from inspection_reports where task_id=$1 order by created_at desc limit 1`, []string{"id", "name", "health_score", "ai_diagnosis"}, taskID)
+		content, aiMeta := s.callAI(ctx, "report_diagnosis", "AI 综合诊断已生成。", "报告上下文："+toJSONString(report))
+		diagnosis := map[string]any{"summary": content, "ai": aiMeta}
+		body, _ := json.Marshal(diagnosis)
+		_, err := s.db.Exec(ctx, `update inspection_reports set ai_diagnosis=$1 where task_id=$2`, body, taskID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"action": action, "task_id": taskID, "diagnosis": diagnosis}, nil
+	default:
+		return nil, fmt.Errorf("unsupported action: %s", action)
+	}
+}
+
+func actionPermission(action string) string {
+	for _, item := range aiActions() {
+		if item["action"] == action {
+			return asString(item["permission"])
+		}
+	}
+	return ""
+}
+
 func resourceCategories(items []map[string]any) []map[string]any {
 	counts := map[string]int{}
 	for _, item := range items {

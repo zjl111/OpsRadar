@@ -148,6 +148,37 @@ func (s *Server) handleCreateAIProvider(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
 }
 
+func (s *Server) handleListAIModels(w http.ResponseWriter, r *http.Request) {
+	writeRows(w, r, s.db, `select id,name,provider_type,endpoint,model,enabled,created_at from ai_model_providers order by enabled desc, created_at desc`, []string{"id", "name", "provider_type", "endpoint", "model", "enabled", "created_at"})
+}
+
+func (s *Server) handleListAIActions(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"items": aiActions()})
+}
+
+func (s *Server) handleExecuteAIAction(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Action string         `json:"action"`
+		Params map[string]any `json:"params"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Action == "" {
+		writeError(w, http.StatusBadRequest, "action is required")
+		return
+	}
+	user := currentUser(r)
+	result, err := s.executeAIAction(r.Context(), user, req.Action, req.Params)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	_ = s.audit(r.Context(), user.ID, user.Username, "ai.actions.execute", "ai_action", req.Action, "success", r.RemoteAddr, map[string]any{"params": req.Params})
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	writeRows(w, r, s.db, `select id,username,display_name,role,permissions,is_active,created_at from users order by created_at desc`, []string{"id", "username", "display_name", "role", "permissions", "is_active", "created_at"})
 }
