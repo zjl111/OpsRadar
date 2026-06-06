@@ -37,7 +37,9 @@ cd opsradar-web && npm install && npm run dev
 - 用户名：`admin`
 - 密码：`OpsRadar@123`
 
-生产环境需要分别配置 `OPSRADAR_JWT_SECRET` 和 `OPSRADAR_ENCRYPTION_KEY`：前者用于登录令牌签名，后者用于资源凭据、集成 Token、数据源密钥和 AI API Key 的 AES-GCM 加密。开发环境未设置 `OPSRADAR_ENCRYPTION_KEY` 时会回退到 `OPSRADAR_JWT_SECRET`，便于兼容已有本地数据。
+生产环境需要分别配置 `OPSRADAR_JWT_SECRET` 和 `OPSRADAR_ENCRYPTION_KEY`：前者用于登录令牌签名，后者用于资源凭据、集成 Token、数据源密钥和 AI API Key 的 AES-GCM 加密。`OPSRADAR_SECRET_KEY` 可作为 `OPSRADAR_JWT_SECRET` 的兼容别名。开发环境未设置 `OPSRADAR_ENCRYPTION_KEY` 时会回退到 `OPSRADAR_JWT_SECRET`，便于兼容已有本地数据。
+
+当 `OPSRADAR_ENV=production` 时，API 会拒绝使用默认 JWT 密钥、默认加密密钥、默认 Worker Token 和默认管理员密码启动；Worker Agent 会拒绝使用默认 Worker Token 启动。
 
 ## Docker Compose
 

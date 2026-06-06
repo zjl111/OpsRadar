@@ -17,6 +17,9 @@ func main() {
 	defer stop()
 
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("config validation failed: %v", err)
+	}
 	log.Printf("opsradar-worker-agent %s connecting to %s", cfg.Name, cfg.APIURL)
 	err := loop.NewRunner(cfg).Run(ctx)
 	if err != nil && !errors.Is(err, context.Canceled) {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -8,6 +9,7 @@ import (
 )
 
 type Config struct {
+	Env               string
 	APIURL            string
 	Token             string
 	ID                string
@@ -24,6 +26,7 @@ type Config struct {
 func Load() Config {
 	name := getenv("OPSRADAR_WORKER_NAME", "worker-local-01")
 	return Config{
+		Env:               getenv("OPSRADAR_ENV", "development"),
 		APIURL:            strings.TrimRight(getenv("OPSRADAR_API_URL", "http://127.0.0.1:8080"), "/"),
 		Token:             getenv("OPSRADAR_WORKER_TOKEN", "dev-worker-token"),
 		ID:                getenv("OPSRADAR_WORKER_ID", name),
@@ -36,6 +39,16 @@ func Load() Config {
 		PollInterval:      time.Duration(getenvInt("OPSRADAR_WORKER_POLL_SECONDS", 5)) * time.Second,
 		HeartbeatInterval: time.Duration(getenvInt("OPSRADAR_WORKER_HEARTBEAT_SECONDS", 10)) * time.Second,
 	}
+}
+
+func (c Config) Validate() error {
+	if !isProduction(c.Env) {
+		return nil
+	}
+	if weakSecret(c.Token, "dev-worker-token") {
+		return fmt.Errorf("invalid production config: OPSRADAR_WORKER_TOKEN must be set to a strong production value")
+	}
+	return nil
 }
 
 func getenv(key, fallback string) string {
@@ -67,4 +80,22 @@ func split(value string) []string {
 		}
 	}
 	return out
+}
+
+func isProduction(env string) bool {
+	env = strings.ToLower(strings.TrimSpace(env))
+	return env == "production" || env == "prod"
+}
+
+func weakSecret(value string, forbidden ...string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) < 16 {
+		return true
+	}
+	for _, item := range forbidden {
+		if value == item {
+			return true
+		}
+	}
+	return false
 }
