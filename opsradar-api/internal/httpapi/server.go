@@ -798,13 +798,23 @@ func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 	issueID := r.PathValue("id")
-	issue, err := queryOne(r.Context(), s.db, `select id,title,status,severity,task_id,resource_id,environment_id,item_id,ai_status,assignee,description,evidence,created_at,updated_at from issues where id=$1`, []string{"id", "title", "status", "severity", "task_id", "resource_id", "environment_id", "item_id", "ai_status", "assignee", "description", "evidence", "created_at", "updated_at"}, issueID)
+	issue, err := queryOne(r.Context(), s.db, `select id,title,status,severity,task_id,target_run_id,resource_id,environment_id,item_id,ai_status,assignee,description,evidence,created_at,updated_at from issues where id=$1`, []string{"id", "title", "status", "severity", "task_id", "target_run_id", "resource_id", "environment_id", "item_id", "ai_status", "assignee", "description", "evidence", "created_at", "updated_at"}, issueID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "issue not found")
 		return
 	}
-	insights, _ := queryMany(r.Context(), s.db, `select id,summary,probable_causes,repair_suggestion,verification_steps,confidence,created_at from issue_insights where issue_id=$1 order by created_at desc`, []string{"id", "summary", "probable_causes", "repair_suggestion", "verification_steps", "confidence", "created_at"}, issueID)
-	issue["insights"] = insights
+	detail := s.issueEvidenceBundle(r.Context(), issue)
+	issue["insights"] = detail["insights"]
+	issue["evidence_chain"] = detail["items"]
+	issue["repair_tasks"] = detail["repair_tasks"]
+	issue["retest_tasks"] = detail["retest_tasks"]
+	issue["processing_records"] = detail["processing_records"]
+	issue["actions"] = []map[string]any{
+		{"action": "analyze_issue", "title": "AI 分析", "requires_confirmation": false},
+		{"action": "create_repair_task", "title": "创建修复任务", "requires_confirmation": true},
+		{"action": "retest_issue", "title": "发起复测", "requires_confirmation": true},
+		{"action": "close_issue", "title": "关闭问题", "requires_confirmation": true},
+	}
 	writeJSON(w, http.StatusOK, issue)
 }
 
@@ -815,6 +825,12 @@ func (s *Server) handleGetIssueEvidences(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "issue not found")
 		return
 	}
+	detail := s.issueEvidenceBundle(r.Context(), issue)
+	writeJSON(w, http.StatusOK, map[string]any{"issue": issue, "items": detail["items"], "repair_tasks": detail["repair_tasks"], "retest_tasks": detail["retest_tasks"], "processing_records": detail["processing_records"]})
+}
+
+func (s *Server) issueEvidenceBundle(ctx context.Context, issue map[string]any) map[string]any {
+	issueID := asString(issue["id"])
 	taskID := asString(issue["task_id"])
 	targetRunID := asString(issue["target_run_id"])
 	itemID := asString(issue["item_id"])
@@ -829,7 +845,7 @@ func (s *Server) handleGetIssueEvidences(w http.ResponseWriter, r *http.Request)
 		},
 	}
 	if targetRunID != "" {
-		steps, _ := queryMany(r.Context(), s.db, `select id,item_id,status,output,error,duration_ms,item_snapshot,created_at from step_runs where target_run_id=$1 and ($2='' or item_id=$2) order by created_at desc limit 20`, []string{"id", "item_id", "status", "output", "error", "duration_ms", "item_snapshot", "created_at"}, targetRunID, itemID)
+		steps, _ := queryMany(ctx, s.db, `select id,item_id,status,output,error,duration_ms,item_snapshot,created_at from step_runs where target_run_id=$1 and ($2='' or item_id=$2) order by created_at desc limit 20`, []string{"id", "item_id", "status", "output", "error", "duration_ms", "item_snapshot", "created_at"}, targetRunID, itemID)
 		for _, step := range steps {
 			evidences = append(evidences, map[string]any{
 				"type":        "inspection_result",
@@ -841,7 +857,7 @@ func (s *Server) handleGetIssueEvidences(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if taskID != "" {
-		logs, _ := queryMany(r.Context(), s.db, `select id,level,message,target_run_id,created_at from task_logs where task_id=$1 and ($2='' or target_run_id=$2) order by created_at desc limit 50`, []string{"id", "level", "message", "target_run_id", "created_at"}, taskID, targetRunID)
+		logs, _ := queryMany(ctx, s.db, `select id,level,message,target_run_id,created_at from task_logs where task_id=$1 and ($2='' or target_run_id=$2) order by created_at desc limit 50`, []string{"id", "level", "message", "target_run_id", "created_at"}, taskID, targetRunID)
 		for _, log := range logs {
 			evidences = append(evidences, map[string]any{
 				"type":        "task_log",
@@ -851,7 +867,7 @@ func (s *Server) handleGetIssueEvidences(w http.ResponseWriter, r *http.Request)
 				"data":        log,
 			})
 		}
-		reports, _ := queryMany(r.Context(), s.db, `select id,name,health_score,ai_diagnosis,created_at from inspection_reports where task_id=$1 order by created_at desc limit 5`, []string{"id", "name", "health_score", "ai_diagnosis", "created_at"}, taskID)
+		reports, _ := queryMany(ctx, s.db, `select id,name,health_score,ai_diagnosis,created_at from inspection_reports where task_id=$1 order by created_at desc limit 5`, []string{"id", "name", "health_score", "ai_diagnosis", "created_at"}, taskID)
 		for _, report := range reports {
 			evidences = append(evidences, map[string]any{
 				"type":        "report",
@@ -862,7 +878,7 @@ func (s *Server) handleGetIssueEvidences(w http.ResponseWriter, r *http.Request)
 			})
 		}
 	}
-	insights, _ := queryMany(r.Context(), s.db, `select id,summary,probable_causes,repair_suggestion,verification_steps,confidence,created_at from issue_insights where issue_id=$1 order by created_at desc`, []string{"id", "summary", "probable_causes", "repair_suggestion", "verification_steps", "confidence", "created_at"}, issueID)
+	insights, _ := queryMany(ctx, s.db, `select id,summary,probable_causes,repair_suggestion,verification_steps,confidence,created_at from issue_insights where issue_id=$1 order by created_at desc`, []string{"id", "summary", "probable_causes", "repair_suggestion", "verification_steps", "confidence", "created_at"}, issueID)
 	for _, insight := range insights {
 		evidences = append(evidences, map[string]any{
 			"type":        "ai_insight",
@@ -872,7 +888,7 @@ func (s *Server) handleGetIssueEvidences(w http.ResponseWriter, r *http.Request)
 			"data":        insight,
 		})
 	}
-	repairs, _ := queryMany(r.Context(), s.db, `select id,status,plan,result,logs,started_at,finished_at,created_at from repair_tasks where issue_id=$1 order by created_at desc`, []string{"id", "status", "plan", "result", "logs", "started_at", "finished_at", "created_at"}, issueID)
+	repairs, _ := queryMany(ctx, s.db, `select id,status,plan,result,logs,worker_id,confirmed_by,started_at,finished_at,created_at,updated_at from repair_tasks where issue_id=$1 order by created_at desc`, []string{"id", "status", "plan", "result", "logs", "worker_id", "confirmed_by", "started_at", "finished_at", "created_at", "updated_at"}, issueID)
 	for _, repair := range repairs {
 		evidences = append(evidences, map[string]any{
 			"type":        "repair_task",
@@ -882,7 +898,31 @@ func (s *Server) handleGetIssueEvidences(w http.ResponseWriter, r *http.Request)
 			"data":        repair,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"issue": issue, "items": evidences})
+	retests, _ := queryMany(ctx, s.db, `select id,name,status,summary,ai_policy,started_at,finished_at,created_at,updated_at from inspection_tasks where task_type='retest' and ai_policy->>'issue_id'=$1 order by created_at desc limit 50`, []string{"id", "name", "status", "summary", "ai_policy", "started_at", "finished_at", "created_at", "updated_at"}, issueID)
+	for _, retest := range retests {
+		evidences = append(evidences, map[string]any{
+			"type":        "retest_task",
+			"title":       "复测任务记录",
+			"source":      "inspection_tasks",
+			"occurred_at": retest["created_at"],
+			"data":        retest,
+		})
+	}
+	records, _ := queryMany(ctx, s.db, `select id,actor_id,actor_name,action,resource_type,resource_id,result,detail,created_at from audit_logs where resource_id=$1 or detail::text like $2 order by created_at desc limit 100`, []string{"id", "actor_id", "actor_name", "action", "resource_type", "resource_id", "result", "detail", "created_at"}, issueID, "%"+issueID+"%")
+	return map[string]any{
+		"items":              evidences,
+		"insights":           nonNilRows(insights),
+		"repair_tasks":       nonNilRows(repairs),
+		"retest_tasks":       nonNilRows(retests),
+		"processing_records": nonNilRows(records),
+	}
+}
+
+func nonNilRows(rows []map[string]any) []map[string]any {
+	if rows == nil {
+		return []map[string]any{}
+	}
+	return rows
 }
 
 func (s *Server) handleAnalyzeIssue(w http.ResponseWriter, r *http.Request) {
