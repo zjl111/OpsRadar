@@ -13,6 +13,9 @@ import (
 )
 
 func (s *Server) dispatchNotification(ctx context.Context, eventType, title, content string, payload map[string]any) {
+	if !s.notificationEventEnabled(ctx, eventType) {
+		return
+	}
 	rows, err := s.db.Query(ctx, `select id,name,channel_type,endpoint,secret_cipher,settings from notification_channels where enabled=true order by created_at`)
 	if err != nil {
 		return
@@ -36,6 +39,15 @@ func (s *Server) dispatchNotification(ctx context.Context, eventType, title, con
 			security.NewID("delivery"), id, eventType, title, content, status, errText, body)
 		_ = name
 	}
+}
+
+func (s *Server) notificationEventEnabled(ctx context.Context, eventType string) bool {
+	var enabled bool
+	err := s.db.QueryRow(ctx, `select enabled from notification_events where event_type=$1`, eventType).Scan(&enabled)
+	if err != nil {
+		return true
+	}
+	return enabled
 }
 
 func (s *Server) postWebhook(ctx context.Context, endpoint, cipher, eventType, title, content string, payload map[string]any) error {

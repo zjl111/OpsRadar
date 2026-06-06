@@ -78,6 +78,20 @@ on conflict (id) do nothing;
 insert into rule_sets (id, name, code, description, item_ids, default_enabled)
 values ('ruleset_default', '默认可用性巡检', 'default-availability', '覆盖 HTTP、Redis、数据库和主机基础可用性', '["item_http_health","item_redis_ping","item_sql_select","item_host_uname"]'::jsonb, true)
 on conflict (code) do update set description=excluded.description,item_ids=excluded.item_ids;
+insert into notification_events (event_type, name, description, enabled)
+values
+('task.completed', '巡检任务完成', '巡检任务完成后发送通知。', true),
+('issue.created', '巡检发现异常', '巡检失败或异常自动生成问题后发送通知。', true),
+('issue.closed', '问题关闭', '复测通过并关闭问题后发送通知。', true),
+('issue.retest_failed', '复测未通过', '复测失败后发送通知。', true),
+('repair.queued', '修复任务排队', '修复任务确认执行后发送通知。', true),
+('repair.completed', '修复任务完成', '修复任务执行完成后发送通知。', true)
+on conflict (event_type) do update set name=excluded.name,description=excluded.description;
+insert into site_settings (key, value)
+values
+('site', '{"name":"OpsRadar","locale":"zh-CN","timezone":"Asia/Shanghai","allow_registration":false}'::jsonb),
+('security', '{"session_ttl_hours":12,"password_policy":"default"}'::jsonb)
+on conflict (key) do nothing;
 `)
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err
@@ -425,6 +439,14 @@ var schema = []string{
 		created_at timestamptz not null default now(),
 		updated_at timestamptz not null default now()
 	)`,
+	`create table if not exists notification_events (
+		event_type text primary key,
+		name text not null,
+		description text not null default '',
+		enabled boolean not null default true,
+		created_at timestamptz not null default now(),
+		updated_at timestamptz not null default now()
+	)`,
 	`create table if not exists notification_deliveries (
 		id text primary key,
 		channel_id text references notification_channels(id) on delete set null,
@@ -436,6 +458,11 @@ var schema = []string{
 		payload jsonb not null default '{}'::jsonb,
 		created_at timestamptz not null default now(),
 		delivered_at timestamptz
+	)`,
+	`create table if not exists site_settings (
+		key text primary key,
+		value jsonb not null default '{}'::jsonb,
+		updated_at timestamptz not null default now()
 	)`,
 	`create table if not exists data_sources (
 		id text primary key,

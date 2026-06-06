@@ -21,6 +21,36 @@ func (s *Server) handleListNotificationDeliveries(w http.ResponseWriter, r *http
 	writeRows(w, r, s.db, `select id,channel_id,event_type,title,content,status,error_message,payload,created_at,delivered_at from notification_deliveries order by created_at desc limit 200`, []string{"id", "channel_id", "event_type", "title", "content", "status", "error_message", "payload", "created_at", "delivered_at"})
 }
 
+func (s *Server) handleListNotificationEvents(w http.ResponseWriter, r *http.Request) {
+	writeRows(w, r, s.db, `select event_type,name,description,enabled,created_at,updated_at from notification_events order by event_type`, []string{"event_type", "name", "description", "enabled", "created_at", "updated_at"})
+}
+
+func (s *Server) handleUpdateNotificationEvent(w http.ResponseWriter, r *http.Request) {
+	eventType := r.PathValue("event_type")
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Enabled     *bool  `json:"enabled"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	_, err := s.db.Exec(r.Context(), `insert into notification_events (event_type,name,description,enabled,updated_at) values ($1,$2,$3,$4,now()) on conflict (event_type) do update set name=coalesce(nullif(excluded.name,''),notification_events.name),description=coalesce(nullif(excluded.description,''),notification_events.description),enabled=excluded.enabled,updated_at=now()`,
+		eventType, req.Name, req.Description, enabled)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	u := currentUser(r)
+	_ = s.audit(r.Context(), u.ID, u.Username, "notification_events.update", "notification_event", eventType, "success", r.RemoteAddr, map[string]any{"enabled": enabled})
+	writeJSON(w, http.StatusOK, map[string]any{"event_type": eventType, "enabled": enabled})
+}
+
 func (s *Server) handleCreateNotificationChannel(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name        string         `json:"name"`
@@ -63,6 +93,57 @@ func (s *Server) handleTestNotificationChannel(w http.ResponseWriter, r *http.Re
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": enabled, "endpoint_configured": endpoint != "", "tested_at": time.Now()})
+}
+
+func (s *Server) handleGetSiteSettings(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(r.Context(), `select key,value,updated_at from site_settings order by key`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+	settings := map[string]any{}
+	updatedAt := map[string]any{}
+	for rows.Next() {
+		var key string
+		var raw []byte
+		var updated time.Time
+		if err := rows.Scan(&key, &raw, &updated); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		settings[key] = jsonRaw(raw)
+		updatedAt[key] = updated
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings, "updated_at": updatedAt})
+}
+
+func (s *Server) handleUpdateSiteSettings(w http.ResponseWriter, r *http.Request) {
+	var req map[string]any
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req) == 0 {
+		writeError(w, http.StatusBadRequest, "settings are required")
+		return
+	}
+	sections := map[string]any{}
+	if _, ok := req["site"]; ok {
+		sections = req
+	} else {
+		sections["site"] = req
+	}
+	for key, value := range sections {
+		body, _ := json.Marshal(value)
+		if _, err := s.db.Exec(r.Context(), `insert into site_settings (key,value,updated_at) values ($1,$2,now()) on conflict (key) do update set value=excluded.value,updated_at=now()`, key, body); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	u := currentUser(r)
+	_ = s.audit(r.Context(), u.ID, u.Username, "settings.site.update", "site_settings", "site", "success", r.RemoteAddr, map[string]any{"sections": len(sections)})
+	s.handleGetSiteSettings(w, r)
 }
 
 func (s *Server) handleListDataSources(w http.ResponseWriter, r *http.Request) {
