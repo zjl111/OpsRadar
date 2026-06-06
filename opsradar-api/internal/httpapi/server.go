@@ -1031,7 +1031,7 @@ func (s *Server) handleWorkerResourceCredential(w http.ResponseWriter, r *http.R
 		writeJSON(w, http.StatusOK, map[string]any{"configured": false})
 		return
 	}
-	secret, err := security.DecryptSecret(s.cfg.JWTSecret, cipher)
+	secret, err := security.DecryptSecret(s.cfg.EncryptionSecret(), cipher)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "credential decrypt failed")
 		return

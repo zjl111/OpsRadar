@@ -216,7 +216,7 @@ func (s *Server) handleCreateAIProvider(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	settings, _ := json.Marshal(req.Settings)
-	cipher, err := security.EncryptSecret(s.cfg.JWTSecret, req.APIKey)
+	cipher, err := security.EncryptSecret(s.cfg.EncryptionSecret(), req.APIKey)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

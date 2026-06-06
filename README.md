@@ -37,6 +37,8 @@ cd opsradar-web && npm install && npm run dev
 - 用户名：`admin`
 - 密码：`OpsRadar@123`
 
+生产环境需要分别配置 `OPSRADAR_JWT_SECRET` 和 `OPSRADAR_ENCRYPTION_KEY`：前者用于登录令牌签名，后者用于资源凭据、集成 Token、数据源密钥和 AI API Key 的 AES-GCM 加密。开发环境未设置 `OPSRADAR_ENCRYPTION_KEY` 时会回退到 `OPSRADAR_JWT_SECRET`，便于兼容已有本地数据。
+
 ## Docker Compose
 
 Compose 默认连接宿主机 PostgreSQL 与 Redis，不重复拉起数据库容器：

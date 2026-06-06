@@ -15,6 +15,7 @@ type Config struct {
 	RedisPassword string
 	RedisDB       int
 	JWTSecret     string
+	EncryptionKey string
 	AdminUsername string
 	AdminPassword string
 	WorkerToken   string
@@ -31,12 +32,20 @@ func Load() Config {
 		RedisPassword: os.Getenv("OPSRADAR_REDIS_PASSWORD"),
 		RedisDB:       getenvInt("OPSRADAR_REDIS_DB", 0),
 		JWTSecret:     getenv("OPSRADAR_JWT_SECRET", "dev-only-change-me"),
+		EncryptionKey: strings.TrimSpace(os.Getenv("OPSRADAR_ENCRYPTION_KEY")),
 		AdminUsername: getenv("OPSRADAR_ADMIN_USERNAME", "admin"),
 		AdminPassword: getenv("OPSRADAR_ADMIN_PASSWORD", "OpsRadar@123"),
 		WorkerToken:   getenv("OPSRADAR_WORKER_TOKEN", "dev-worker-token"),
 		ReportDir:     getenv("OPSRADAR_REPORT_DIR", "reports"),
 		TokenTTL:      time.Duration(getenvInt("OPSRADAR_TOKEN_TTL_HOURS", 24)) * time.Hour,
 	}
+}
+
+func (c Config) EncryptionSecret() string {
+	if strings.TrimSpace(c.EncryptionKey) != "" {
+		return strings.TrimSpace(c.EncryptionKey)
+	}
+	return c.JWTSecret
 }
 
 func getenv(key, fallback string) string {

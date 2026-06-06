@@ -40,7 +40,7 @@ func (s *Server) defaultAIProvider(ctx context.Context) (aiProvider, error) {
 	if err != nil {
 		return provider, err
 	}
-	key, err := security.DecryptSecret(s.cfg.JWTSecret, cipher)
+	key, err := security.DecryptSecret(s.cfg.EncryptionSecret(), cipher)
 	if err == nil {
 		provider.APIKey = key
 	}

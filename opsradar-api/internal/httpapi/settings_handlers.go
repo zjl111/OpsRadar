@@ -67,7 +67,7 @@ func (s *Server) handleCreateNotificationChannel(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "name and channel_type are required")
 		return
 	}
-	cipher, err := security.EncryptSecret(s.cfg.JWTSecret, req.Secret)
+	cipher, err := security.EncryptSecret(s.cfg.EncryptionSecret(), req.Secret)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -171,7 +171,7 @@ func (s *Server) handleCreateDataSource(w http.ResponseWriter, r *http.Request) 
 	if req.TimeoutSeconds <= 0 {
 		req.TimeoutSeconds = 10
 	}
-	cipher, err := security.EncryptSecret(s.cfg.JWTSecret, req.Secret)
+	cipher, err := security.EncryptSecret(s.cfg.EncryptionSecret(), req.Secret)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -226,7 +226,7 @@ func (s *Server) handleQueryDataSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.Unmarshal(settingsRaw, &ds.Settings)
-	secret, err := security.DecryptSecret(s.cfg.JWTSecret, ds.SecretCipher)
+	secret, err := security.DecryptSecret(s.cfg.EncryptionSecret(), ds.SecretCipher)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "data source secret decrypt failed")
 		return

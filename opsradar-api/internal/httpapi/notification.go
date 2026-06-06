@@ -54,7 +54,7 @@ func (s *Server) postWebhook(ctx context.Context, endpoint, cipher, eventType, t
 	if strings.TrimSpace(endpoint) == "" {
 		return fmt.Errorf("endpoint is empty")
 	}
-	secret, _ := security.DecryptSecret(s.cfg.JWTSecret, cipher)
+	secret, _ := security.DecryptSecret(s.cfg.EncryptionSecret(), cipher)
 	body, _ := json.Marshal(map[string]any{
 		"event_type": eventType,
 		"title":      title,

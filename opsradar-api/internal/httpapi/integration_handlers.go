@@ -79,7 +79,7 @@ func (s *Server) handleUpsertResourceCredential(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	cipher, err := security.EncryptSecret(s.cfg.JWTSecret, req.Secret)
+	cipher, err := security.EncryptSecret(s.cfg.EncryptionSecret(), req.Secret)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -112,7 +112,7 @@ func (s *Server) handleSaveJumpServerConfig(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "name and base_url are required")
 		return
 	}
-	cipher, err := security.EncryptSecret(s.cfg.JWTSecret, req.Token)
+	cipher, err := security.EncryptSecret(s.cfg.EncryptionSecret(), req.Token)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -352,7 +352,7 @@ func (s *Server) getJumpServerConfig(ctx context.Context, id string) (jumpServer
 	if err := s.db.QueryRow(ctx, `select base_url,token_cipher from jumpserver_configs where id=$1`, id).Scan(&cfg.BaseURL, &cipher); err != nil {
 		return cfg, err
 	}
-	token, err := security.DecryptSecret(s.cfg.JWTSecret, cipher)
+	token, err := security.DecryptSecret(s.cfg.EncryptionSecret(), cipher)
 	if err != nil {
 		return cfg, err
 	}
