@@ -55,6 +55,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/resources/{id}/test", s.auth(s.permit("resources:read", s.handleTestResource)))
 	s.mux.HandleFunc("POST /api/resources/{id}/discover-services", s.auth(s.permit("resources:read", s.handleDiscoverResourceServices)))
 	s.mux.HandleFunc("POST /api/resources/{id}/credential", s.auth(s.permit("resources:credential", s.handleUpsertResourceCredential)))
+	s.mux.HandleFunc("GET /api/applications", s.auth(s.permit("resources:read", s.handleListApplications)))
+	s.mux.HandleFunc("POST /api/applications", s.auth(s.permit("resources:create", s.handleCreateApplication)))
 	s.mux.HandleFunc("GET /api/environments", s.auth(s.handleListEnvironments))
 	s.mux.HandleFunc("POST /api/environments", s.auth(s.permit("resources:create", s.handleCreateEnvironment)))
 	s.mux.HandleFunc("POST /api/environments/{id}/resources", s.auth(s.permit("resources:update", s.handleBindEnvironmentResource)))
@@ -370,6 +372,41 @@ func (s *Server) handleDiscoverResourceServices(w http.ResponseWriter, r *http.R
 	u := currentUser(r)
 	_ = s.audit(r.Context(), u.ID, u.Username, "resources.discover_services", "resource", resourceID, "success", r.RemoteAddr, map[string]any{"count": len(services)})
 	writeJSON(w, http.StatusOK, map[string]any{"resource_id": resourceID, "items": services})
+}
+
+func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) {
+	writeRows(w, r, s.db, `
+select a.id,a.name,a.code,a.owner,a.description,count(e.id) as environment_count,a.created_at
+from applications a
+left join app_environments e on e.application_id=a.id
+group by a.id
+order by a.created_at desc`, []string{"id", "name", "code", "owner", "description", "environment_count", "created_at"})
+}
+
+func (s *Server) handleCreateApplication(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name        string `json:"name"`
+		Code        string `json:"code"`
+		Owner       string `json:"owner"`
+		Description string `json:"description"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Code) == "" {
+		writeError(w, http.StatusBadRequest, "name and code are required")
+		return
+	}
+	id := security.NewID("app")
+	_, err := s.db.Exec(r.Context(), `insert into applications (id,name,code,owner,description) values ($1,$2,$3,$4,$5)`, id, req.Name, req.Code, req.Owner, req.Description)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	u := currentUser(r)
+	_ = s.audit(r.Context(), u.ID, u.Username, "applications.create", "application", id, "success", r.RemoteAddr, map[string]any{"code": req.Code})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
 }
 
 func (s *Server) handleListEnvironments(w http.ResponseWriter, r *http.Request) {
