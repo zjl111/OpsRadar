@@ -13,6 +13,16 @@ func (s *Server) handleListCronPlans(w http.ResponseWriter, r *http.Request) {
 	writeRows(w, r, s.db, `select id,name,environment_id,rule_set_id,interval_seconds,next_run_at,enabled,task_template,created_at from cron_plans order by created_at desc`, []string{"id", "name", "environment_id", "rule_set_id", "interval_seconds", "next_run_at", "enabled", "task_template", "created_at"})
 }
 
+func (s *Server) handleGetCronPlan(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	plan, err := queryOne(r.Context(), s.db, `select id,name,environment_id,rule_set_id,interval_seconds,next_run_at,enabled,task_template,created_at from cron_plans where id=$1`, []string{"id", "name", "environment_id", "rule_set_id", "interval_seconds", "next_run_at", "enabled", "task_template", "created_at"}, id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "cron plan not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
 func (s *Server) handleCreateCronPlan(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name            string         `json:"name"`
@@ -46,6 +56,81 @@ func (s *Server) handleCreateCronPlan(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	_ = s.audit(r.Context(), u.ID, u.Username, "cron_plans.create", "cron_plan", id, "success", r.RemoteAddr, nil)
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
+func (s *Server) handleUpdateCronPlan(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Name            string         `json:"name"`
+		EnvironmentID   string         `json:"environment_id"`
+		RuleSetID       string         `json:"rule_set_id"`
+		IntervalSeconds int            `json:"interval_seconds"`
+		Enabled         *bool          `json:"enabled"`
+		TaskTemplate    map[string]any `json:"task_template"`
+		ResetNextRun    bool           `json:"reset_next_run"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	current, err := queryOne(r.Context(), s.db, `select id,name,environment_id,rule_set_id,interval_seconds,enabled,task_template from cron_plans where id=$1`, []string{"id", "name", "environment_id", "rule_set_id", "interval_seconds", "enabled", "task_template"}, id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "cron plan not found")
+		return
+	}
+	name := defaultString(req.Name, asString(current["name"]))
+	envID := asString(current["environment_id"])
+	if req.EnvironmentID != "" {
+		envID = req.EnvironmentID
+	}
+	ruleSetID := defaultString(req.RuleSetID, asString(current["rule_set_id"]))
+	intervalSeconds := intFromAny(current["interval_seconds"])
+	if req.IntervalSeconds > 0 {
+		intervalSeconds = req.IntervalSeconds
+	}
+	if intervalSeconds < 60 {
+		intervalSeconds = 60
+	}
+	enabled := boolFromAny(current["enabled"])
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	template := current["task_template"]
+	if req.TaskTemplate != nil {
+		template = req.TaskTemplate
+	}
+	body, _ := json.Marshal(template)
+	nextRun := time.Now().Add(time.Duration(intervalSeconds) * time.Second)
+	if !req.ResetNextRun {
+		_, err = s.db.Exec(r.Context(), `update cron_plans set name=$1,environment_id=$2,rule_set_id=$3,interval_seconds=$4,enabled=$5,task_template=$6 where id=$7`,
+			name, nullText(envID), ruleSetID, intervalSeconds, enabled, body, id)
+	} else {
+		_, err = s.db.Exec(r.Context(), `update cron_plans set name=$1,environment_id=$2,rule_set_id=$3,interval_seconds=$4,next_run_at=$5,enabled=$6,task_template=$7 where id=$8`,
+			name, nullText(envID), ruleSetID, intervalSeconds, nextRun, enabled, body, id)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	u := currentUser(r)
+	_ = s.audit(r.Context(), u.ID, u.Username, "cron_plans.update", "cron_plan", id, "success", r.RemoteAddr, map[string]any{"enabled": enabled})
+	s.handleGetCronPlan(w, r)
+}
+
+func (s *Server) handleDeleteCronPlan(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	tag, err := s.db.Exec(r.Context(), `delete from cron_plans where id=$1`, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "cron plan not found")
+		return
+	}
+	u := currentUser(r)
+	_ = s.audit(r.Context(), u.ID, u.Username, "cron_plans.delete", "cron_plan", id, "success", r.RemoteAddr, nil)
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
 }
 
 func (s *Server) handleRetestIssue(w http.ResponseWriter, r *http.Request) {

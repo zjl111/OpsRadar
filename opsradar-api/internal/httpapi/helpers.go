@@ -156,6 +156,26 @@ func asString(value any) string {
 	return fmt.Sprint(value)
 }
 
+func intFromAny(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int32:
+		return int(v)
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
+func boolFromAny(value any) bool {
+	v, _ := value.(bool)
+	return v
+}
+
 func toJSONString(value any) string {
 	body, err := json.Marshal(value)
 	if err != nil {
