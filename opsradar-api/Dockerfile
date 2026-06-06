@@ -11,7 +11,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/opsradar-api ./cmd/api
 
 FROM alpine:3.21
 
-RUN adduser -D -H opsradar
+RUN apk add --no-cache curl && adduser -D -H opsradar
 USER opsradar
 WORKDIR /app
 

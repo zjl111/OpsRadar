@@ -13,6 +13,12 @@ services:
       - "8080:8080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
     restart: unless-stopped
 
   opsradar-worker-agent:
@@ -28,7 +34,14 @@ services:
       OPSRADAR_WORKER_REGION: ${OPSRADAR_WORKER_REGION:-local}
       OPSRADAR_WORKER_ZONE: ${OPSRADAR_WORKER_ZONE:-compose}
     depends_on:
-      - opsradar-api
+      opsradar-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://opsradar-api:8080/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
     restart: unless-stopped
 
   opsradar-web:
@@ -38,5 +51,12 @@ services:
     ports:
       - "5173:80"
     depends_on:
-      - opsradar-api
+      opsradar-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
     restart: unless-stopped
