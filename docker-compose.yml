@@ -10,7 +10,7 @@ services:
       OPSRADAR_DATABASE_URL: ${OPSRADAR_DOCKER_DATABASE_URL:-postgres://postgres:postgres@host.docker.internal:5432/opsradar?sslmode=disable}
       OPSRADAR_REDIS_ADDR: ${OPSRADAR_DOCKER_REDIS_ADDR:-host.docker.internal:6379}
     ports:
-      - "8080:8080"
+      - "${OPSRADAR_API_BIND:-127.0.0.1}:8080:8080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -49,7 +49,7 @@ services:
       context: .
       dockerfile: opsradar-web/Dockerfile
     ports:
-      - "5173:80"
+      - "${OPSRADAR_WEB_BIND:-127.0.0.1}:5173:80"
     depends_on:
       opsradar-api:
         condition: service_healthy
