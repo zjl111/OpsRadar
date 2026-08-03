@@ -55,3 +55,14 @@ docker compose up --build
 
 - Web 控制台：`http://127.0.0.1:5173`
 - API 健康检查：`http://127.0.0.1:8080/api/health`
+
+## 生产部署
+
+生产环境使用独立的 Compose 覆盖文件，包含 PostgreSQL、Redis 和 HTTPS 入口。先在 `.env` 中设置强随机的 JWT、加密、Worker Token、管理员和 PostgreSQL 密码，并把证书放到 `deploy/certs/tls.crt` 与 `deploy/certs/tls.key`：
+
+```bash
+cp .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+默认生产数据库为 `opsradar_v1`，数据卷和报告卷会独立持久化。HTTP 会重定向到 HTTPS；Web、API 和 Worker 都提供容器健康检查并自动重启。
