@@ -5,3 +5,5 @@ __pycache__/
 reports/
 node_modules/
 *.db
+._*
+**/._*

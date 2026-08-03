@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -15,6 +16,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis_data:/data
@@ -26,6 +28,7 @@ services:
 
   opsradar-api:
     build: .
+    restart: unless-stopped
     environment:
       OPSRADAR_ENV: production
       OPSRADAR_SECRET_KEY: ${OPSRADAR_SECRET_KEY:-replace-with-a-long-random-jwt-secret}
@@ -60,6 +63,7 @@ services:
 
   opsradar-worker:
     build: .
+    restart: unless-stopped
     environment:
       OPSRADAR_ENV: production
       OPSRADAR_SECRET_KEY: ${OPSRADAR_SECRET_KEY:-replace-with-a-long-random-jwt-secret}
@@ -82,6 +86,7 @@ services:
 
   opsradar-beat:
     build: .
+    restart: unless-stopped
     environment:
       OPSRADAR_ENV: production
       OPSRADAR_SECRET_KEY: ${OPSRADAR_SECRET_KEY:-replace-with-a-long-random-jwt-secret}
@@ -98,6 +103,7 @@ services:
 
   nginx:
     image: nginx:1.25-alpine
+    restart: unless-stopped
     ports:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
